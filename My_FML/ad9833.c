@@ -16,6 +16,7 @@ void ad9833_init(void)
 {
     AD9833_SPI_CS_H;
     AD9833_SPI_SCK_H;
+    
     HAL_Delay(10);
 
     ad9833_control_word = ad9833_Reg_control_B28 | ad9833_Sine;
