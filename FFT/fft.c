@@ -1,27 +1,3 @@
-/**
- * @file    fft.c
- * @brief   频谱分析与放大器特性测量模块
- *
- * 整体数据流：
- *   TIM3 TRGO → ADC1/ADC2 DMA同步采样 → ADC_Flag=1 → main.c触发
- *   → Split_ADC_Buffers() 解包 → 本模块各 Calculate_* 函数
- *
- * ADC通道与缓冲区对应关系：
- *   ADC1 Buffer: [IN16(Us), IN17(Ui), IN16(Us), IN17(Ui), ...]  (交错存放)
- *   ADC2 Buffer: [IN5(U0),  IN14(8307), IN5(U0), IN14(8307), ...]
- *   解包后：ADC_Us[] / ADC_Ui[] / ADC_U0[] / ADC_8307[]
- *
- * 测量原理：
- *   输入阻抗  Zi = Rs * Ui / (Us - Ui)
- *   输出阻抗  Zo = RL * (U_open - U0) / U0   (继电器切换负载)
- *   增益      Av = 20*lg(U0 / Ui)            (单位: dB)
- *
- * 扫频模式（待实现）：
- *   AD9833步进频率 → 等待稳定 → 重采样 → FFT/检波器取幅值 → HMI绘点
- *   f < 100kHz: FFT路径
- *   f >= 100kHz: AD8307检波器路径
- */
-
 #include "fft.h"
 
 /* -----------------------------------------------------------------------
