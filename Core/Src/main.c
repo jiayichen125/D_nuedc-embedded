@@ -70,7 +70,7 @@ static volatile uint8_t adc2_done = 0;
 
 /* Input/output resistance values used by the basic measurement functions. */
 int RL = 2000;
-int Rs = 2000;
+int Rs = 10000;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -180,11 +180,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
     while (1)
     {
-      for (uint8_t i = 0; i < 10U; i++)
-        {
-            ad9833_set_freq_ch(10000U * (i + 1U), ad9833_Sine, ad9833_CH);
-            HAL_Delay(7000U);
-        }
         if (ADC_Flag == 1U)
         {
             ADC_Flag = 0U;

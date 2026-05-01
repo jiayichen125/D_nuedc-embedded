@@ -163,7 +163,7 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     }
 
     /* 步骤8: 找峰值 bin，再用重心插值精化频率和幅值 */
-    Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index);
+    Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index,ampl);
     ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
 }
 
@@ -340,11 +340,11 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
  * 只搜索 [0, FFT_LEN/2) 范围，因为 FFT 输出后半段是前半段的镜像（共轭对称）。
  * 同时更新全局 FFT_Freq（粗略频率）和 FFT_Ampl1（峰值幅度）。
  */
-void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index)
+void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index,float *FFT_Ampl)
 {
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
     FFT_Freq  = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
-    FFT_Ampl1 = *FFT_mag_max;
+    FFT_Ampl = FFT_mag_max;
 }
 
 /**
