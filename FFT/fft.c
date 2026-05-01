@@ -290,8 +290,8 @@ void Calculate_Gain(void)
 void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
 {
     /* 第①步：切换 HMI 到曲线页面，清除旧波形 */
-        HMI_Wave_Clear();
-        HMI_Set_Page(sweep_page_id);
+    printf("page %d\xff\xff\xff", SWEEP_HMI_PAGE);
+    HMI_Wave_Clear("sweep_wf", 0);
     
         /* 第②步~第⑤步：频率循环 */
     for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
@@ -325,10 +325,10 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
             /* 第④步（高频路径）：读 ADC_8307[] 均值，换算 Vrms，再和 Ui 比较求增益 */
         }
 
-        /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点 */
-        uint8_t hmi_val = (uint8_t)((Au_dB + 40.0f) * 255.0f / 80.0f); // 假设 -40dB ~ +40dB 映射到 0~255
+        /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点
+         * 当前映射范围：-40dB ~ +40dB → 0 ~ 255，可按实际量程调整 */
+        uint8_t hmi_val = (uint8_t)((Au_dB + 40.0f) * 255.0f / 80.0f);
         HMI_Wave("sweep_wf", 0, hmi_val);
-        (void)Au_dB; /* 占位，实现后删除此行 */
     }
 
     /* 扫频结束后恢复 AD9833 到初始测量频率 */
