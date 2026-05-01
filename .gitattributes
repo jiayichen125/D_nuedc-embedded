@@ -1,0 +1,9 @@
+# 自动探测文本文件并统一转换为 LF 提交
+* text=auto eol=lf
+
+# 明确指定某些文件类型的行尾序列
+*.py text eol=lf
+*.vue text eol=lf
+*.ts text eol=lf
+*.c text eol=lf
+*.h text eol=lf
