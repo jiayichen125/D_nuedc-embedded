@@ -3,10 +3,10 @@
 #include <string.h>
 
 /*外部引用*/
-extern uint16_t ADC_Us[ADC_SIZE] = {0};             // 存放Us电压
-extern uint16_t ADC_U0[ADC_SIZE] = {0};             // 存放U0电压
-extern uint16_t ADC_Ui[ADC_SIZE] = {0};             // 存放Ui电压
-extern uint16_t ADC_9833[ADC_SIZE] = {0};           // 存放AD9833电压
+extern uint16_t ADC_Us[1024] = {0};             // 存放Us电压
+extern uint16_t ADC_U0[1024] = {0};             // 存放U0电压
+extern uint16_t ADC_Ui[1024] = {0};             // 存放Ui电压
+extern uint16_t ADC_9833[1024] = {0};           // 存放AD9833电压
 
 /* 变量 */
 #define FFT_LEN 1024

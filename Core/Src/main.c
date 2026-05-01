@@ -1,21 +1,21 @@
 /* USER CODE BEGIN Header */
 /**
-  ******************************************************************************
-  * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
-  *
-  * <h2><center>&copy; Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.</center></h2>
-  *
-  * This software component is licensed by ST under Ultimate Liberty license
-  * SLA0044, the "License"; You may not use this file except in compliance with
-  * the License. You may obtain a copy of the License at:
-  *                             www.st.com/SLA0044
-  *
-  ******************************************************************************
-  */
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * <h2><center>&copy; Copyright (c) 2026 STMicroelectronics.
+ * All rights reserved.</center></h2>
+ *
+ * This software component is licensed by ST under Ultimate Liberty license
+ * SLA0044, the "License"; You may not use this file except in compliance with
+ * the License. You may obtain a copy of the License at:
+ *                             www.st.com/SLA0044
+ *
+ ******************************************************************************
+ */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
@@ -28,9 +28,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "HMI.h"
 #include "fft.h"
 #include "math.h"
-#include "HMI.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,12 +51,17 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-#define ADC_SIZE 		1024
-#define DAC_SIZE 		1024
+#define ADC_SIZE 1024
+#define rank 2
 
-uint16_t ADC_Buffer[ADC_SIZE]={0};
-uint8_t ADC_Flag=0;
-float ADC_float[ADC_SIZE]={0};
+uint16_t ADC_Buffer1[ADC_SIZE * rank] = {0}; // 存放Us Ui电压
+uint16_t ADC_Buffer2[ADC_SIZE * rank] = {0}; // 存放U0 AD9833电压
+uint16_t ADC_Us[ADC_SIZE] = {0};             // 存放Us电压
+uint16_t ADC_U0[ADC_SIZE] = {0};             // 存放U0电压
+uint16_t ADC_Ui[ADC_SIZE] = {0};             // 存放Ui电压
+uint16_t ADC_9833[ADC_SIZE] = {0};           // 存放AD9833电压
+uint8_t ADC_Flag = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -108,17 +114,42 @@ int main(void)
   MX_USART1_UART_Init();
   MX_ADC2_Init();
   /* USER CODE BEGIN 2 */
-
+    HAL_ADCEx_Calibration_Start(&hadc1, ADC_CALIB_OFFSET, ADC_SINGLE_ENDED);
+    HAL_TIM_Base_Start(&htim3);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_Buffer, ADC_SIZE);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
-  while (1)
-  {
+    while (1)
+    {
+        if (ADC_Flag == 1)
+        {
+            ADC_Flag = 0;
+
+            /*
+            rank1是偶 rank2是奇
+            adc1 rank1是pa0 rank2是pa1 Us接pa0 Ui接pa1
+            adc2 rank1是pa2 rank2是pb1 U0接pa2 9833接pb1
+            */
+            for (uint16_t i = 0; i < ADC_SIZE * rank; i++)
+            {
+                ADC_Us[i] = ADC_Buffer1[2 * i];
+                ADC_Ui[i] = ADC_Buffer1[2 * i + 1];
+            }
+            for (uint16_t i = 0; i < ADC_SIZE * rank; i++)
+            {
+                ADC_U0[i] = ADC_Buffer2[2 * i];
+                ADC_9833[i] = ADC_Buffer2[2 * i + 1];
+            }
+
+            FFT_Process();
+            HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_Buffer, ADC_SIZE);
+        }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  }
+    }
   /* USER CODE END 3 */
 }
 
@@ -207,7 +238,14 @@ void PeriphCommonClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+    if (hadc == &hadc1)
+    {
+        HAL_ADC_Stop(hadc);
+        ADC_Flag = 1;
+    }
+}
 /* USER CODE END 4 */
 
 /**
@@ -217,11 +255,11 @@ void PeriphCommonClock_Config(void)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
-  /* User can add his own implementation to report the HAL error return state */
-  __disable_irq();
-  while (1)
-  {
-  }
+    /* User can add his own implementation to report the HAL error return state */
+    __disable_irq();
+    while (1)
+    {
+    }
   /* USER CODE END Error_Handler_Debug */
 }
 
@@ -236,8 +274,8 @@ void Error_Handler(void)
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
-  /* User can add his own implementation to report the file name and line number,
-     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+    /* User can add his own implementation to report the file name and line number,
+       ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
