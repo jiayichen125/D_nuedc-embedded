@@ -158,6 +158,9 @@ void Calculate_Gain(void)
     HMI_send_float("x2", Au);
 }
 
+/*扫频 f=8khz时进入检波器*/
+
+
 void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index)
 {
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
