@@ -96,6 +96,7 @@ targets:
         - STM32H743xx
         - ARM_MATH_CM7
       incList:
+        - .
         - Core/Inc
         - Drivers/STM32H7xx_HAL_Driver/Inc
         - Drivers/STM32H7xx_HAL_Driver/Inc/Legacy

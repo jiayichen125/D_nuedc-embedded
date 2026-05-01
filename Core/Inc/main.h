@@ -62,16 +62,16 @@ void Error_Handler(void);
 #define RELAY_1_GPIO_Port GPIOC
 #define RELAY_2_Pin GPIO_PIN_1
 #define RELAY_2_GPIO_Port GPIOC
-#define RELAY_3_Pin GPIO_PIN_2
-#define RELAY_3_GPIO_Port GPIOC
-#define RELAY_4_Pin GPIO_PIN_3
-#define RELAY_4_GPIO_Port GPIOC
 #define PGA113_CS_Pin GPIO_PIN_3
 #define PGA113_CS_GPIO_Port GPIOA
 #define AD9833_CS_Pin GPIO_PIN_4
 #define AD9833_CS_GPIO_Port GPIOA
 #define RELAY_5_Pin GPIO_PIN_4
 #define RELAY_5_GPIO_Port GPIOC
+#define RELAY_3_Pin GPIO_PIN_6
+#define RELAY_3_GPIO_Port GPIOC
+#define RELAY_4_Pin GPIO_PIN_7
+#define RELAY_4_GPIO_Port GPIOC
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
