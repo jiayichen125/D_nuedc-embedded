@@ -4,6 +4,7 @@ type: ARM
 deviceName: null
 packDir: .pack/Keil/STM32H7xx_DFP.2.7.0
 srcDirs:
+  - Switch
   - My_SPI
   - My_APL
   - My_BLL
@@ -115,6 +116,7 @@ targets:
         - My_HDl
         - My_FML
         - My_SPI
+        - Switch
         - .cmsis/include
         - MDK-ARM/RTE/_D_AD9833_AD8703
       libList: []
