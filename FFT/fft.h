@@ -5,7 +5,10 @@
 #include "arm_math.h"
 #include "main.h"
 #include "usart.h"
+#include "HMI.h"
 #include <stdint.h>
+#include "Switch.h"
+
 
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl);
 void window(void);

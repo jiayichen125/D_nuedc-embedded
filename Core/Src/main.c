@@ -52,16 +52,16 @@
 
 /* USER CODE BEGIN PV */
 #define ADC_SIZE 1024
-#define ADC_RANK 2
+#define rank 2
 
 /* ADC1: rank1=Us, rank2=Ui
    ADC2: rank1=U0, rank2=AD8703 detector output */
-uint16_t ADC_Buffer1[ADC_SIZE * ADC_RANK] = {0};
-uint16_t ADC_Buffer2[ADC_SIZE * ADC_RANK] = {0};
+uint16_t ADC_Buffer1[ADC_SIZE * rank] = {0};
+uint16_t ADC_Buffer2[ADC_SIZE * rank] = {0};
 uint16_t ADC_Us[ADC_SIZE] = {0};
 uint16_t ADC_U0[ADC_SIZE] = {0};
 uint16_t ADC_Ui[ADC_SIZE] = {0};
-uint16_t ADC_AD8703[ADC_SIZE] = {0};
+uint16_t ADC_8703[ADC_SIZE] = {0};
 
 /* Set only after both ADC1 and ADC2 finish one complete DMA frame. */
 volatile uint8_t ADC_Flag = 0;
@@ -80,7 +80,6 @@ void PeriphCommonClock_Config(void);
 static void Split_ADC_Buffers(void);
 static void Start_ADC_Capture(void);
 uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
-
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -93,7 +92,7 @@ static void Split_ADC_Buffers(void)
         ADC_Us[i] = ADC_Buffer1[2U * i];
         ADC_Ui[i] = ADC_Buffer1[2U * i + 1U];
         ADC_U0[i] = ADC_Buffer2[2U * i];
-        ADC_AD8703[i] = ADC_Buffer2[2U * i + 1U];
+        ADC_8703[i] = ADC_Buffer2[2U * i + 1U];
     }
 }
 
@@ -107,8 +106,8 @@ static void Start_ADC_Capture(void)
     adc2_done = 0;
     ADC_Flag = 0;
 
-    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_Buffer1, ADC_SIZE * ADC_RANK);
-    HAL_ADC_Start_DMA(&hadc2, (uint32_t *)ADC_Buffer2, ADC_SIZE * ADC_RANK);
+    HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_Buffer1, ADC_SIZE * rank);
+    HAL_ADC_Start_DMA(&hadc2, (uint32_t *)ADC_Buffer2, ADC_SIZE * rank);
 }
 
 /* Blocking helper for FFT/sweep functions when a fresh full frame is needed. */
@@ -130,7 +129,6 @@ uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms)
     Split_ADC_Buffers();
     return 1U;
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -182,9 +180,7 @@ int main(void)
             ADC_Flag = 0U;
             Split_ADC_Buffers();
 
-            /* Background basic measurements.
-               Sweep functions can also call Acquire_All_ADC_Samples_Blocking()
-               whenever they need a fresh full frame. */
+            /* 输入电阻 输出电阻增益计算 */
             Calculate_Input_Impedance(Rs);
             Calculate_Output_Impedance(RL);
             Calculate_Gain();

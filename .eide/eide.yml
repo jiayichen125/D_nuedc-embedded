@@ -106,6 +106,7 @@ targets:
         - Drivers/CMSIS/DSP/Include
         - FFT
         - HMI
+        - Switch
         - .cmsis/include
         - MDK-ARM/RTE/_D_AD9833_AD8703
       libList: []
