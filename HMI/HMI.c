@@ -65,3 +65,10 @@ void HMI_set_property(char* obj_name, char* property, int value)
     // 格式: obj_name.property=value + 0xFF 0xFF 0xFF
     printf("%s.%s=%d\xff\xff\xff", obj_name, property, value);
 }
+
+// 设置页面
+void HMI_Set_Page(int page_id)
+{
+    // 格式: page page_id + 0xFF 0xFF 0xFF
+    printf("page %d\xff\xff\xff", page_id);
+}

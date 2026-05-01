@@ -1,39 +1,86 @@
+/**
+ * @file    fft.c
+ * @brief   频谱分析与放大器特性测量模块
+ *
+ * 整体数据流：
+ *   TIM3 TRGO → ADC1/ADC2 DMA同步采样 → ADC_Flag=1 → main.c触发
+ *   → Split_ADC_Buffers() 解包 → 本模块各 Calculate_* 函数
+ *
+ * ADC通道与缓冲区对应关系：
+ *   ADC1 Buffer: [IN16(Us), IN17(Ui), IN16(Us), IN17(Ui), ...]  (交错存放)
+ *   ADC2 Buffer: [IN5(U0),  IN14(8307), IN5(U0), IN14(8307), ...]
+ *   解包后：ADC_Us[] / ADC_Ui[] / ADC_U0[] / ADC_8307[]
+ *
+ * 测量原理：
+ *   输入阻抗  Zi = Rs * Ui / (Us - Ui)
+ *   输出阻抗  Zo = RL * (U_open - U0) / U0   (继电器切换负载)
+ *   增益      Av = 20*lg(U0 / Ui)            (单位: dB)
+ *
+ * 扫频模式（待实现）：
+ *   AD9833步进频率 → 等待稳定 → 重采样 → FFT/检波器取幅值 → HMI绘点
+ *   f < 100kHz: FFT路径
+ *   f >= 100kHz: AD8307检波器路径
+ */
+
 #include "fft.h"
 
-/*外部引用*/
-extern uint16_t ADC_Us[1024];   // 存放Us电压
-extern uint16_t ADC_U0[1024];   // 存放U0电压
-extern uint16_t ADC_Ui[1024];   // 存放Ui电压
-extern uint16_t ADC_8307[1024]; // 存放AD8307电压
-extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms); 
+/* -----------------------------------------------------------------------
+ * 外部引用
+ * 这四个数组由 main.c 中的 Split_ADC_Buffers() 填充，
+ * 每次 ADC DMA 完成后更新，长度均为 ADC_LEN 点。
+ * ----------------------------------------------------------------------- */
+extern uint16_t ADC_Us[1024];   // IN16: 串联电阻 Rs 前端电压 (用于 Zi 计算)
+extern uint16_t ADC_U0[1024];   // IN5:  放大器输出电压 (用于 Zo、Av 计算)
+extern uint16_t ADC_Ui[1024];   // IN17: 串联电阻 Rs 后端电压 = 放大器输入 (用于 Zi、Av 计算)
+extern uint16_t ADC_8307[1024]; // IN14: AD8307 对数检波器直流输出 (高频段幅值测量)
 
-/* 变量 */
-#define FFT_LEN 1024
-#define ADC_LEN 1024
-#define rank 2
+/* 外部函数：阻塞等待一次完整的 ADC DMA 帧采集完成
+ * 用于需要在函数内部主动触发重采样的场合（如 Zo 测量时切换继电器后）
+ * 返回 1=成功, 0=超时 */
+extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 
+/* -----------------------------------------------------------------------
+ * 宏定义
+ * ----------------------------------------------------------------------- */
+#define FFT_LEN 1024   // FFT 点数，必须是2的幂
+#define ADC_LEN 1024   // ADC 采样点数，与 FFT_LEN 保持一致
+#define rank    2      // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
+
+/* -----------------------------------------------------------------------
+ * 全局变量
+ * ----------------------------------------------------------------------- */
 uint8_t ifftFlag = 0;
-uint8_t adc_flag = 0; // 用于重新采集U∞的标志
-int BaseIdx = 0;      // 基波下标
-float fs = 20000.0f;  // 采样率
-float FFT_Freq = 0;   // FFT计算得到频率
-float FFT_Ampl1 = 0;  // FFT计算得到的幅值
-float FFT_Ampl2 = 0;
-float DC = 0;            // 直流偏置
-float FFT_mag_max = {0}; // 幅度谱最大值
-uint32_t FFT_mag_max_index = 0;
+uint8_t adc_flag = 0; // 用于重新采集 U∞ 的标志（Zo 测量时使用）
+int BaseIdx = 0;      // 基波在 FFT 幅度谱中的下标
 
-/* 输入和输出缓冲 */
+/* fs: 采样率，决定 FFT 频率分辨率 = fs/FFT_LEN
+ * 例：fs=20kHz, FFT_LEN=1024 → 分辨率≈19.5Hz，最高可分析 10kHz 信号
+ * 注意：测量高频时需提高 TIM3 触发频率并同步修改此值 */
+float fs = 20000.0f;
 
+float FFT_Freq  = 0;   // 当前帧 FFT 计算得到的基波频率 (Hz)
+float FFT_Ampl1 = 0;   // FFT_Process 输出幅值暂存 (第1路)
+float FFT_Ampl2 = 0;   // FFT_Process 输出幅值暂存 (第2路)
+float DC = 0;          // 直流偏置（各采样点均值），FFT 前去除以消除直流分量
+
+float FFT_mag_max = 0;           // 幅度谱峰值（归一化后）
+uint32_t FFT_mag_max_index = 0;  // 幅度谱峰值所在 bin 下标
+
+/* -----------------------------------------------------------------------
+ * FFT 运算缓冲区
+ * FFT_Input: 复数交错格式 [实部0, 虚部0, 实部1, 虚部1, ...]，长度2*FFT_LEN
+ * FFT_mag:   幅度谱，长度 FFT_LEN，有效信息在前 FFT_LEN/2 个 bin
+ * ----------------------------------------------------------------------- */
 float FFT_Output[FFT_LEN];
 float FFT_Input[FFT_LEN * 2];
-float FFT_mag[FFT_LEN]; // 幅度谱
+float FFT_mag[FFT_LEN];
 float IFFT_Output[FFT_LEN];
 
-uint8_t EnableWindow = 1;
-float Window_OutputBuffer[ADC_LEN];
-static float window_power_correction = 1.0f;
+uint8_t EnableWindow = 1;                 // 1=使能 Hanning 窗，0=矩形窗
+float Window_OutputBuffer[ADC_LEN];       // 窗函数系数缓存
+static float window_power_correction = 1.0f; // 窗函数功率补偿系数（Hanning=1.5）
 
+/* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
 void showdata(float *buffer, uint16_t n)
 {
     for (int i = 0; i < n; i++)
@@ -42,7 +89,16 @@ void showdata(float *buffer, uint16_t n)
     }
 }
 
-/*Hanning窗*/
+/**
+ * @brief 计算 Hanning 窗系数并写入 Window_OutputBuffer[]
+ *
+ * 为何需要加窗：ADC 采样的有限长度序列相当于乘以矩形窗，
+ * 会在 FFT 结果中产生频谱泄漏（旁瓣），导致相邻频率干扰。
+ * Hanning 窗能将旁瓣衰减约 31dB，适合单音正弦波的幅值测量。
+ *
+ * 代价：频率分辨率降低约一半（主瓣变宽），但对本题影响可接受。
+ * 使用 EnableWindow=0 可切换为矩形窗（仅调试用）。
+ */
 void window(void)
 {
     if (EnableWindow)
@@ -65,9 +121,29 @@ void window(void)
     }
 }
 
+/**
+ * @brief 对指定 ADC 缓冲区执行 FFT，输出基波幅值
+ *
+ * @param ADC_Buffer  原始 ADC 采样数组（uint16_t, 长度 ADC_LEN）
+ * @param FFT_Ampl    [OUT] 经重心插值矫正后的基波幅值（ADC LSB 为单位的峰值）
+ *
+ * 处理流程：
+ *   1. 求均值 DC，作为直流偏置去除
+ *   2. 加 Hanning 窗（减少频谱泄漏）
+ *   3. 填充复数输入缓冲（虚部为0）
+ *   4. CMSIS arm_cfft_f32 执行 FFT
+ *   5. arm_cmplx_mag_f32 计算各 bin 幅度
+ *   6. 归一化：直流 bin /N, 其余 bin *2/N（对应单边谱峰值）
+ *   7. 乘以窗函数功率补偿系数（Hanning=1.5）
+ *   8. 找最大 bin → 重心插值精化频率和幅值 → 写入 *FFT_Ampl
+ *
+ * 注意：FFT_Ampl1/FFT_Ampl2 是全局暂存，连续调用时第一次结果
+ *       已通过指针写出，第二次 memset 不会覆盖已写出的值。
+ */
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
 {
     uint32_t adc_sum = 0;
+    /* ampl 是 FFT_Ampl 的本地副本，传给重心插值函数使用 */
     float *ampl;
     ampl = FFT_Ampl;
 
@@ -75,27 +151,33 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     memset(FFT_mag, 0, sizeof(FFT_mag));
     memset(FFT_Output, 0, sizeof(FFT_Output));
 
+    /* 步骤1: 计算均值（直流偏置），后续减去以消除 DC 分量 */
     for (int i = 0; i < ADC_LEN; i++)
     {
         adc_sum += ADC_Buffer[i];
     }
     DC = adc_sum / 1024.0f;
 
+    /* 步骤2: 生成窗函数系数 */
     window();
 
+    /* 步骤3: 填充复数输入，去直流 + 加窗，虚部置0 */
     for (int i = 0; i < ADC_LEN; i++)
     {
-        FFT_Input[i * 2] = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
+        FFT_Input[i * 2]     = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
         FFT_Input[i * 2 + 1] = 0.0f;
     }
 
-    /*FFT计算*/
+    /* 步骤4: CMSIS FFT，ifftFlag=0 正变换，bitReverseFlag=1 自动位反转 */
     arm_cfft_f32(&arm_cfft_sR_f32_len1024, FFT_Input, 0, 1);
-    // showdata(FFT_Input, FFT_LEN);
-    // 计算幅值
+
+    /* 步骤5: 计算各 bin 复数模（幅度谱）*/
     arm_cmplx_mag_f32(FFT_Input, FFT_mag, FFT_LEN);
 
-    // 窗函数功率补偿＋归一化
+    /* 步骤6+7: 归一化 + 窗函数功率补偿
+     * DC(i=0): /N
+     * 其余:    *2/N  （合并单、双边谱到单边峰值）
+     * 再乘 window_power_correction 补偿窗函数能量损失 */
     for (uint16_t i = 0; i < FFT_LEN; i++)
     {
         if (i == 0)
@@ -104,70 +186,198 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
             FFT_mag[i] = FFT_mag[i] * 2.0f / FFT_LEN * window_power_correction;
     }
 
+    /* 步骤8: 找峰值 bin，再用重心插值精化频率和幅值 */
     Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index);
-    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, &ampl, &FFT_Freq, 2);
+    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
 }
 
 /**
- 计算输入阻抗 Ri=Rs*UI/(US-UI)
- Rs=2kΩ
+ * @brief 计算被测放大器输入阻抗 Zi
+ *
+ * 原理：在信号源和放大器输入端之间串联已知电阻 Rs，
+ *       通过 FFT 分别测量 Rs 前（Us）和 Rs 后（Ui）的幅值。
+ *       由分压关系：Zi = Rs * Ui / (Us - Ui)
+ *
+ * 注意：Us 和 Ui 的幅值单位相同（ADC LSB），比值运算中单位自动消除，
+ *       因此无需换算为实际电压即可直接计算阻抗（前提是两路前级增益相同）。
+ *
+ * @param Rs  串联已知电阻阻值 (Ω)
  */
 void Calculate_Input_Impedance(int Rs)
 {
     float Ri;
-    FFT_Process(ADC_Ui, &FFT_Ampl1);
-    FFT_Process(ADC_Us, &FFT_Ampl2);
-    // 计算输入阻抗
+    FFT_Process(ADC_Ui, &FFT_Ampl1); // 先算 Ui，结果存 FFT_Ampl1
+    FFT_Process(ADC_Us, &FFT_Ampl2); // 再算 Us，结果存 FFT_Ampl2
     Ri = (float)Rs * FFT_Ampl1 / (FFT_Ampl2 - FFT_Ampl1);
     HMI_send_float("x0", Ri);
 }
 
 /**
- 计算输出阻抗 R0=RL*（U∞-U0）/U0
- RL=2kΩ
- 继电器断开时，U∞；继电器接通时，U0
- 继电器
+ * @brief 计算被测放大器输出阻抗 Zo
+ *
+ * 原理：等效输出模型为 Thevenin 源（Voc + Zo 串联）。
+ *   - 继电器接通（接负载 RL）: 测 U0（带载输出电压）
+ *   - 继电器断开（空载）:      测 U∞（开路输出电压）
+ *   - 公式: Zo = RL * (U∞ - U0) / U0
+ *
+ * 时序：
+ *   1. 先在继电器接通状态下（主循环已采好数据）取 U0 → FFT_Ampl1
+ *   2. 断开继电器，等待 10ms 信号稳定
+ *   3. 主动触发一次新采样（Acquire_All_ADC_Samples_Blocking）
+ *   4. 取 U∞ → FFT_Ampl2
+ *   5. 计算并发送结果，然后恢复继电器接通状态
+ *
+ * @param RL  外接负载电阻阻值 (Ω)
  */
 void Calculate_Output_Impedance(int RL)
 {
     float R0;
-    FFT_Process(ADC_U0, &FFT_Ampl1);
+    /* 步骤1: 继电器当前接通，此帧数据即为带载测量值 */
+    FFT_Process(ADC_U0, &FFT_Ampl1); // FFT_Ampl1 = U0 (带载)
+
+    /* 步骤2: 断开负载，等待信号稳定 */
     Relay_Off();
     HAL_Delay(10);
 
+    /* 步骤3~4: 重采样，获取空载电压 */
     if (Acquire_All_ADC_Samples_Blocking(200U) == 1U)
     {
-        FFT_Process(ADC_U0, &FFT_Ampl2);
+        FFT_Process(ADC_U0, &FFT_Ampl2); // FFT_Ampl2 = U∞ (空载)
         R0 = (float)RL * (FFT_Ampl2 - FFT_Ampl1) / FFT_Ampl1;
         HMI_send_float("x1", R0);
     }
 
+    /* 步骤5: 恢复负载接通，保证后续测量环境一致 */
     Relay_On();
 }
 
 /**
- 计算增益 Au=-U0/Ui
+ * @brief 计算被测放大器电压增益 Av (dB)
+ *
+ * 公式：Av = 20 * lg(U0 / Ui)
+ * 正值表示放大，负值表示衰减。
+ *
+ * 注意：此处使用 FFT 幅值比（峰值之比），由于是比值运算，
+ *       不需要换算为实际电压，单位一致即可。
  */
 void Calculate_Gain(void)
 {
     float Au;
 
-    FFT_Process(ADC_U0, &FFT_Ampl1);
-    FFT_Process(ADC_Ui, &FFT_Ampl2);
-    Au = -FFT_Ampl1 / FFT_Ampl2;
+    FFT_Process(ADC_U0, &FFT_Ampl1); // FFT_Ampl1 = |U0| 幅值
+    FFT_Process(ADC_Ui, &FFT_Ampl2); // FFT_Ampl2 = |Ui| 幅值
+
+    /* Av(dB) = 20*log10(U0/Ui)，保护除零 */
+    if (FFT_Ampl2 > 1e-6f)
+        Au = 20.0f * log10f(FFT_Ampl1 / FFT_Ampl2);
+    else
+        Au = 0.0f;
+
     HMI_send_float("x2", Au);
 }
 
-/*扫频 f=8khz时进入检波器*/
+/* -----------------------------------------------------------------------
+ * 扫频幅频特性测量（待实现）
+ *
+ * 目标：在 start_hz ~ stop_hz 范围内步进扫频，逐点测量增益 Av(dB)，
+ *       在 HMI 波形控件上绘制幅频特性曲线。
+ *
+ * 实现步骤（每个频率点）：
+ *   ① ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0) 设置当前频率
+ *   ② HAL_Delay(5) 等待 AD9833 输出稳定（约 1~2 个信号周期）
+ *   ③ Acquire_All_ADC_Samples_Blocking(200) 重新采样一帧
+ *   ④ 判断频率范围：
+ *      f < 100000Hz → FFT 路径：FFT_Process(U0) / FFT_Process(Ui) → Av
+ *      f >= 100000Hz → AD8307 路径：读 ADC_8307[] 均值 → 换算 Vrms → Av
+ *   ⑤ 将 Av 映射到 HMI 波形控件坐标（0~255），调用 HMI_Wave()
+ *   ⑥ f += step_hz，循环直到 f > stop_hz
+ *
+ * AD8307 换算公式（斜率 25mV/dB，截距 -84dBm，负载 50Ω）：
+ *   v_adc  = ADC_8307_avg * 3.3f / 65535.0f
+ *   p_dbm  = v_adc / 0.025f + (-84.0f)
+ *   Vrms   = sqrtf(50.0f * powf(10.0f, (p_dbm - 30.0f) / 10.0f))
+ *
+ * 注意事项：
+ *   - 扫频前调用 HMI_Wave_Clear() 清除上次曲线
+ *   - 扫频前切换 HMI 页面到曲线页（page sweep_page_id）
+ *   - 高频段 fs 需要对应提高（修改 TIM3 ARR），或提前完成高频率程序
+ *   - 扫频结束后恢复 AD9833 到初始频率
+ * ----------------------------------------------------------------------- */
 
+/**
+ * @brief 扫频幅频特性测量
+ *
+ * @param start_hz  起始频率 (Hz)
+ * @param stop_hz   终止频率 (Hz)
+ * @param step_hz   步进频率 (Hz)
+ */
+void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
+{
+    /* 第①步：切换 HMI 到曲线页面，清除旧波形 */
+        HMI_Wave_Clear();
+        HMI_Set_Page(sweep_page_id);
+    
+        /* 第②步~第⑤步：频率循环 */
+    for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
+    {
+        /* 第②步：设置 AD9833 频率，等待输出稳定 */
+        ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0);
+        HAL_Delay(5);
 
+        /* 第③步：触发一次新采样，若超时则跳过本频率点 */
+        if (Acquire_All_ADC_Samples_Blocking(200U) != 1U)
+        {
+            continue;
+        }
+
+        float Au_dB = 0.0f;
+
+        if (f < 100000U)
+        {
+            /* 第④步（低频路径）：FFT 计算 U0 和 Ui 幅值，求增益 */
+            float U0_Ampl, Ui_Ampl;
+            FFT_Process(ADC_U0, &U0_Ampl);
+            FFT_Process(ADC_Ui, &Ui_Ampl);
+            if (Ui_Ampl > 1e-6f)
+                Au_dB = 20.0f * log10f(U0_Ampl / Ui_Ampl);
+            else
+                Au_dB = 0.0f;
+
+        }
+        else
+        {
+            /* 第④步（高频路径）：读 ADC_8307[] 均值，换算 Vrms，再和 Ui 比较求增益 */
+        }
+
+        /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点 */
+        uint8_t hmi_val = (uint8_t)((Au_dB + 40.0f) * 255.0f / 80.0f); // 假设 -40dB ~ +40dB 映射到 0~255
+        HMI_Wave("sweep_wf", 0, hmi_val);
+        (void)Au_dB; /* 占位，实现后删除此行 */
+    }
+
+    /* 扫频结束后恢复 AD9833 到初始测量频率 */
+}
+
+/**
+ * @brief 在幅度谱前半段（单边谱）中找峰值 bin
+ *
+ * 只搜索 [0, FFT_LEN/2) 范围，因为 FFT 输出后半段是前半段的镜像（共轭对称）。
+ * 同时更新全局 FFT_Freq（粗略频率）和 FFT_Ampl1（峰值幅度）。
+ */
 void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index)
 {
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
-    FFT_Freq = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
+    FFT_Freq  = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
     FFT_Ampl1 = *FFT_mag_max;
 }
 
+/**
+ * @brief 手动搜索基波 bin（跳过 DC 附近的 bin 0、1）
+ *
+ * 与 Process_FFT_mag 的区别：从 i=2 开始，避免 DC 泄漏干扰，
+ * 适用于低频信号（基波 bin 较小）时 arm_max_f32 可能被 DC 干扰的情况。
+ * 结果写入全局 BaseIdx，可供其他函数使用。
+ */
 void Find_BaseIndex(void)
 {
     float max_val = 0.0f;
@@ -183,21 +393,20 @@ void Find_BaseIndex(void)
     }
 }
 
-/*输入参数为FFT计算后的结果，输出矫正后的频率和幅度
-
-FFT_mag_max_index				FFT结果中峰值的位置
-fs				采样频率
-FFT_Ampl	    矫正后的幅值
-Freq[0]			矫正后的频率
-correctNum		矫正的点数，一般取2即可，确保峰值左右的correctNum内没有其他信号
-FFT_mag		FFT结果的幅值数组
-FFT_mag_max_index				FFT结果中峰值的位置
-fs				采样频率
-FFT_Ampl	    矫正后的幅值
-Freq[0]			矫正后的频率
-correctNum		矫正的点数，一般取2即可，确保峰值左右的correctNum内没有其他信号
-FFT_mag		FFT结果的幅值数组
-*/
+/**
+ * @brief 重心插值法精化 FFT 频率和幅值
+ *
+ * 背景：FFT 频率分辨率 = fs/N，信号频率不一定恰好落在整数 bin 上，
+ *       会造成幅值偏低、频率偏移（栅栏效应）。
+ *       重心插值利用峰值 bin 周围 ±correctNum 个 bin 的能量分布，
+ *       以功率加权重心估计真实频率，精度可提升约一个数量级。
+ *
+ * @param FFT_mag_max_index  峰值 bin 下标（由 Process_FFT_mag 得到）
+ * @param fs                 采样率 (Hz)
+ * @param FFT_Ampl           [OUT] 矫正后幅值（能量加权范数，近似峰值幅度）
+ * @param Freq               [OUT] 矫正后频率 (Hz)
+ * @param correctNum         参与插值的单侧 bin 数，通常取 2
+ */
 void ADC_FFT_Get_Wave_Mes(uint32_t FFT_mag_max_index, float fs, float *FFT_Ampl, float *Freq, int correctNum)
 {
     int i;

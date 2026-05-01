@@ -20,6 +20,7 @@ void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_i
 void Calculate_Input_Impedance(int Rs);
 void Calculate_Output_Impedance(int RL);
 void Calculate_Gain(void);
+void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz);
 
 
 #endif
