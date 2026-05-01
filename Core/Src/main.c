@@ -31,7 +31,6 @@
 #include "HMI.h"
 #include "fft.h"
 #include "math.h"
-
 #include "system.h"
 /* USER CODE END Includes */
 

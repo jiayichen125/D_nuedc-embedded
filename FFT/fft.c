@@ -105,7 +105,7 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     }
 
     Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index);
-    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, &ampl, &FFT_Freq, 2);
+    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
 }
 
 /**
@@ -159,6 +159,7 @@ void Calculate_Gain(void)
 }
 
 /*扫频 f=8khz时进入检波器*/
+
 
 
 void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index)
