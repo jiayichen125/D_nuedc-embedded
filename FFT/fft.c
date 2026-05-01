@@ -1,41 +1,114 @@
 #include "fft.h"
 #include "HMI.h"
+#include "Switch.h"
+#include <math.h>
 #include <string.h>
 
-/*外部引用*/
-extern uint16_t ADC_Us[1024] = {0};             // 存放Us电压
-extern uint16_t ADC_U0[1024] = {0};             // 存放U0电压
-extern uint16_t ADC_Ui[1024] = {0};             // 存放Ui电压
-extern uint16_t ADC_9833[1024] = {0};           // 存放AD9833电压
+extern uint16_t ADC_Us[1024];
+extern uint16_t ADC_U0[1024];
+extern uint16_t ADC_Ui[1024];
+extern uint16_t ADC_AD8703[1024];
+extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 
-/* 变量 */
 #define FFT_LEN 1024
 #define ADC_LEN 1024
+#define SWEEP_MAX_POINTS 256
+#define ADC_VREF 3.3f
+#define ADC_FULL_SCALE 65535.0f
 
 uint8_t ifftFlag = 0;
-int BaseIdx = 0;     // 基波下标
-float fs = 20000.0f; // 采样率
-float FFT_Freq = 0;  // FFT计算得到频率
-float FFT_Ampl1 = 0; // FFT计算得到的幅值
+int BaseIdx = 0;
+float fs = 20000.0f;
+float FFT_Freq = 0;
+float FFT_Ampl1 = 0;
 float FFT_Ampl2 = 0;
-float DC = 0;            // 直流偏置
-float FFT_mag_max = {0}; // 幅度谱最大值
+float DC = 0;
+float FFT_mag_max = 0;
 uint32_t FFT_mag_max_index = 0;
-
-/* 输入和输出缓冲 */
 
 float FFT_Output[FFT_LEN];
 float FFT_Input[FFT_LEN * 2];
-float FFT_mag[FFT_LEN]; // 幅度谱
+float FFT_mag[FFT_LEN];
 float IFFT_Output[FFT_LEN];
 
 uint8_t EnableWindow = 1;
 float Window_OutputBuffer[ADC_LEN];
 static float window_power_correction = 1.0f;
+static float sweep_ampl_buffer[SWEEP_MAX_POINTS];
+
+__weak void AD9833_SetFrequency_Hz(float freq_hz)
+{
+    (void)freq_hz;
+}
+
+__weak float AD8703_ConvertVoltageToAmplitude(float detector_voltage, float freq_hz)
+{
+    (void)freq_hz;
+    return detector_voltage;
+}
+
+static float Get_ADC_Mean(uint16_t *buffer)
+{
+    uint32_t sum = 0;
+
+    for (uint16_t i = 0; i < ADC_LEN; i++)
+    {
+        sum += buffer[i];
+    }
+
+    return (float)sum / (float)ADC_LEN;
+}
+
+static float ADC_Code_To_Voltage(float adc_code)
+{
+    return adc_code * ADC_VREF / ADC_FULL_SCALE;
+}
+
+static uint8_t Normalize_To_Wave_Point(float value, float min_value, float max_value)
+{
+    float normalized;
+
+    if (max_value <= min_value)
+    {
+        return 128;
+    }
+
+    normalized = (value - min_value) * 255.0f / (max_value - min_value);
+
+    if (normalized < 0.0f)
+    {
+        normalized = 0.0f;
+    }
+    else if (normalized > 255.0f)
+    {
+        normalized = 255.0f;
+    }
+
+    return (uint8_t)(normalized + 0.5f);
+}
+
+static float Measure_FFT_Amplitude_From_U0(void)
+{
+    float amplitude = 0.0f;
+
+    FFT_Process(ADC_U0, &amplitude);
+    return amplitude;
+}
+
+static float Measure_DC_Level_From_U0(void)
+{
+    return ADC_Code_To_Voltage(Get_ADC_Mean(ADC_U0));
+}
+
+static float Measure_Detector_Amplitude_From_AD8703(float freq_hz)
+{
+    float detector_voltage = ADC_Code_To_Voltage(Get_ADC_Mean(ADC_AD8703));
+    return AD8703_ConvertVoltageToAmplitude(detector_voltage, freq_hz);
+}
 
 void showdata(float *buffer, uint16_t n)
 {
-    for (int i = 0; i < n; i++)
+    for (uint16_t i = 0; i < n; i++)
     {
         printf("%.3f\n", buffer[i]);
     }
@@ -45,17 +118,16 @@ void window(void)
 {
     if (EnableWindow)
     {
-        for (int i = 0; i < ADC_LEN; i++)
+        for (uint16_t i = 0; i < ADC_LEN; i++)
         {
-            float tempCos = cosf(2.0f * PI * i / (ADC_LEN - 1));
+            float tempCos = cosf(2.0f * PI * i / (ADC_LEN - 1U));
             Window_OutputBuffer[i] = 0.5f * (1.0f - tempCos);
         }
-        /* Hann window attenuates energy, so compensate before reading amplitude. */
         window_power_correction = 1.5f;
     }
     else
     {
-        for (int i = 0; i < ADC_LEN; i++)
+        for (uint16_t i = 0; i < ADC_LEN; i++)
         {
             Window_OutputBuffer[i] = 1.0f;
         }
@@ -66,86 +138,212 @@ void window(void)
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
 {
     uint32_t adc_sum = 0;
-    float *ampl;
-    ampl = FFT_Ampl;
 
     memset(FFT_Input, 0, sizeof(FFT_Input));
     memset(FFT_mag, 0, sizeof(FFT_mag));
     memset(FFT_Output, 0, sizeof(FFT_Output));
 
-    for (int i = 0; i < ADC_LEN; i++)
+    for (uint16_t i = 0; i < ADC_LEN; i++)
     {
         adc_sum += ADC_Buffer[i];
     }
-    DC = adc_sum / 1024.0f;
 
+    DC = adc_sum / (float)ADC_LEN;
     window();
 
-    for (int i = 0; i < ADC_LEN; i++)
+    for (uint16_t i = 0; i < ADC_LEN; i++)
     {
-        FFT_Input[i * 2] = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
-        FFT_Input[i * 2 + 1] = 0.0f;
+        FFT_Input[i * 2U] = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
+        FFT_Input[i * 2U + 1U] = 0.0f;
     }
 
-    /* FFT_Input is an interleaved complex buffer: real sample + zero imaginary part. */
     arm_cfft_f32(&arm_cfft_sR_f32_len1024, FFT_Input, 0, 1);
-    // showdata(FFT_Input, FFT_LEN);
     arm_cmplx_mag_f32(FFT_Input, FFT_mag, FFT_LEN);
 
     for (uint16_t i = 0; i < FFT_LEN; i++)
     {
-        /* Keep DC single-sided; double non-DC bins for the single-sided spectrum. */
-        if (i == 0)
+        if (i == 0U)
+        {
             FFT_mag[i] = FFT_mag[i] / FFT_LEN * window_power_correction;
+        }
         else
+        {
             FFT_mag[i] = FFT_mag[i] * 2.0f / FFT_LEN * window_power_correction;
+        }
     }
 
     Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index);
-    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, &ampl, &FFT_Freq, 2);
+    ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, FFT_Ampl, &FFT_Freq, 2);
 }
 
-/**
- 计算输入阻抗 Ri=Rs*UI/(US-UI)
- Rs=2kΩ
- */
 void Calculate_Input_Impedance(int Rs)
 {
     float Ri;
-    FFT_Process(ADC_Ui,&FFT_Ampl1);
-    FFT_Process(ADC_Us,&FFT_Ampl2);
-    // 计算输入阻抗
+
+    FFT_Process(ADC_Ui, &FFT_Ampl1);
+    FFT_Process(ADC_Us, &FFT_Ampl2);
     Ri = (float)Rs * FFT_Ampl1 / (FFT_Ampl2 - FFT_Ampl1);
     HMI_send_float("x0", Ri);
 }
 
-/**
- 计算输出阻抗 R0=RL*（U∞-U0）/U0
- RL=2kΩ
- 继电器断开时，U∞；继电器接通时，U0
- 继电器
- */
+void Calculate_Output_Impedance(int RL)
+{
+    float R0;
 
+    FFT_Process(ADC_U0, &FFT_Ampl1);
+    Relay_Off();
+    HAL_Delay(10);
 
- /**
- 计算增益 Au=-U0/Ui
- 继电器接通时，U0
- */
+    if (Acquire_All_ADC_Samples_Blocking(200U) == 1U)
+    {
+        FFT_Process(ADC_U0, &FFT_Ampl2);
+        R0 = (float)RL * (FFT_Ampl2 - FFT_Ampl1) / FFT_Ampl1;
+        HMI_send_float("x1", R0);
+    }
 
-/*fft caculate */
-// 从频谱中提取信号，找到主频，计算信号频率和幅度。
+    Relay_On();
+}
+
+void Calculate_Gain(void)
+{
+    float Au;
+
+    FFT_Process(ADC_U0, &FFT_Ampl1);
+    FFT_Process(ADC_Ui, &FFT_Ampl2);
+    Au = -FFT_Ampl1 / FFT_Ampl2;
+    HMI_send_float("x2", Au);
+}
+
+float Measure_Output_Amplitude(float current_freq_hz, float detector_switch_freq_hz)
+{
+    if (current_freq_hz <= 0.0f)
+    {
+        return Measure_DC_Level_From_U0();
+    }
+
+    if (current_freq_hz < detector_switch_freq_hz)
+    {
+        return Measure_FFT_Amplitude_From_U0();
+    }
+
+    return Measure_Detector_Amplitude_From_AD8703(current_freq_hz);
+}
+
+void Sweep_Amplitude_Response(char *wave_name,
+                              int ch,
+                              float start_freq_hz,
+                              float stop_freq_hz,
+                              uint16_t points,
+                              float detector_switch_freq_hz,
+                              uint32_t settle_ms)
+{
+    float log_start;
+    float log_stop;
+    float min_amplitude = 0.0f;
+    float max_amplitude = 0.0f;
+    uint16_t actual_points;
+
+    if ((wave_name == NULL) || (points == 0U) || (stop_freq_hz < start_freq_hz))
+    {
+        return;
+    }
+
+    actual_points = points;
+    if (actual_points > SWEEP_MAX_POINTS)
+    {
+        actual_points = SWEEP_MAX_POINTS;
+    }
+
+    if (detector_switch_freq_hz <= 0.0f)
+    {
+        detector_switch_freq_hz = 5000.0f;
+    }
+
+    if (detector_switch_freq_hz > 8000.0f)
+    {
+        detector_switch_freq_hz = 8000.0f;
+    }
+
+    log_start = log10f((start_freq_hz < 1.0f) ? 1.0f : start_freq_hz);
+    log_stop = log10f(stop_freq_hz);
+
+    Relay_On();
+    HMI_Wave_Clear(wave_name, ch);
+
+    for (uint16_t i = 0; i < actual_points; i++)
+    {
+        float freq_hz;
+
+        if (i == 0U)
+        {
+            freq_hz = 0.0f;
+        }
+        else if (actual_points > 2U)
+        {
+            float position = (float)(i - 1U) / (float)(actual_points - 2U);
+            freq_hz = powf(10.0f, log_start + (log_stop - log_start) * position);
+        }
+        else
+        {
+            freq_hz = (start_freq_hz < 1.0f) ? 1.0f : start_freq_hz;
+        }
+
+        AD9833_SetFrequency_Hz(freq_hz);
+        HAL_Delay(settle_ms);
+
+        if (Acquire_All_ADC_Samples_Blocking(200U) == 1U)
+        {
+            sweep_ampl_buffer[i] = Measure_Output_Amplitude(freq_hz, detector_switch_freq_hz);
+        }
+        else
+        {
+            sweep_ampl_buffer[i] = 0.0f;
+        }
+
+        if (i == 0U)
+        {
+            min_amplitude = sweep_ampl_buffer[i];
+            max_amplitude = sweep_ampl_buffer[i];
+        }
+        else
+        {
+            if (sweep_ampl_buffer[i] < min_amplitude)
+            {
+                min_amplitude = sweep_ampl_buffer[i];
+            }
+            if (sweep_ampl_buffer[i] > max_amplitude)
+            {
+                max_amplitude = sweep_ampl_buffer[i];
+            }
+        }
+    }
+
+    for (uint16_t i = 0; i < actual_points; i++)
+    {
+        uint8_t wave_point = Normalize_To_Wave_Point(sweep_ampl_buffer[i], min_amplitude, max_amplitude);
+        HMI_Wave(wave_name, ch, wave_point);
+    }
+}
+
+void Sweep_Amplitude_Response_0Hz_To_12M5(char *wave_name,
+                                          int ch,
+                                          uint16_t points,
+                                          float detector_switch_freq_hz,
+                                          uint32_t settle_ms)
+{
+    Sweep_Amplitude_Response(wave_name,
+                             ch,
+                             1.0f,
+                             12500000.0f,
+                             points,
+                             detector_switch_freq_hz,
+                             settle_ms);
+}
 
 void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index)
 {
-
-    // 找幅度谱前一半数据，找到最大值和索引
-    arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
-
-    // 求频率：最大值结果*采样率/FFT长度
+    arm_max_f32(FFT_mag, FFT_LEN / 2U, FFT_mag_max, FFT_mag_max_index);
     FFT_Freq = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
-
-    // 求幅值：最大值结果索引*2/FFT长度 前面已经进行过归一处理了，所以这里不需要再除以FFT_LEN了/*2
-    FFT_Ampl = *FFT_mag_max;
 }
 
 void Find_BaseIndex(void)
@@ -163,22 +361,6 @@ void Find_BaseIndex(void)
     }
 }
 
-/*输入参数为FFT计算后的结果，输出矫正后的频率和幅度
-
-FFT_mag_max_index				FFT结果中峰值的位置
-fs				采样频率
-FFT_Ampl	    矫正后的幅值
-Freq[0]			矫正后的频率
-correctNum		矫正的点数，一般取2即可，确保峰值左右的correctNum内没有其他信号
-FFT_mag		FFT结果的幅值数组
-FFT_mag_max_index				FFT结果中峰值的位置
-fs				采样频率
-FFT_Ampl	    矫正后的幅值
-Freq[0]			矫正后的频率
-correctNum		矫正的点数，一般取2即可，确保峰值左右的correctNum内没有其他信号
-FFT_mag		FFT结果的幅值数组
-*/
-
 void ADC_FFT_Get_Wave_Mes(uint32_t FFT_mag_max_index, float fs, float *FFT_Ampl, float *Freq, int correctNum)
 {
     int i;
@@ -186,16 +368,27 @@ void ADC_FFT_Get_Wave_Mes(uint32_t FFT_mag_max_index, float fs, float *FFT_Ampl,
     float DatePower2 = 0.0f;
     float f;
 
+    if (FFT_mag_max_index < (uint32_t)correctNum)
+    {
+        *FFT_Ampl = FFT_mag[FFT_mag_max_index];
+        *Freq = (float)FFT_mag_max_index * fs / FFT_LEN;
+        return;
+    }
+
+    if (FFT_mag_max_index > (FFT_LEN / 2U - 1U - (uint32_t)correctNum))
+    {
+        *FFT_Ampl = FFT_mag[FFT_mag_max_index];
+        *Freq = (float)FFT_mag_max_index * fs / FFT_LEN;
+        return;
+    }
+
     for (i = -correctNum; i <= correctNum; i++)
     {
-        /* Use local spectral energy centroid to refine the peak-bin frequency estimate. */
         DatePower1 += (FFT_mag_max_index + i) * FFT_mag[FFT_mag_max_index + i] * FFT_mag[FFT_mag_max_index + i];
         DatePower2 += FFT_mag[FFT_mag_max_index + i] * FFT_mag[FFT_mag_max_index + i];
     }
 
     f = DatePower1 / DatePower2;
-    // Freq[0] = f * fs / FFT_LEN;
-    *FFT_Ampl = sqrtf(DatePower2); // 对邻域内的能量（幅值的平方和）开根号，恢复有效值 (RMS) k=1, 去掉2倍, 直接出电压
-    // HMI_send_float("x0", *FFT_Ampl);
-    // HMI_send_float("x1", Freq[0]);
+    *Freq = f * fs / FFT_LEN;
+    *FFT_Ampl = sqrtf(DatePower2);
 }
