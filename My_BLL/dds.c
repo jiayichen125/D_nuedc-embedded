@@ -1,6 +1,6 @@
 #include "dds.h"
-void waveset(uint32_t Freq, uint16_t type)
+
+void waveset(uint32_t Freq, uint16_t type, uint16_t ch)
 {
-    ad9833_set_freq(Freq, type);
-    // 根据输入的频率、波形类型和通道配置相应的寄存器值，并通过SPI发送给AD9833
+    ad9833_set_freq_ch(Freq, type, (uint8_t)ch);
 }
