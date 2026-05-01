@@ -4,7 +4,11 @@ type: ARM
 deviceName: null
 packDir: .pack/Keil/STM32H7xx_DFP.2.7.0
 srcDirs:
-  - AD9833
+  - My_SPI
+  - My_APL
+  - My_BLL
+  - My_HDL
+  - My_FML
 virtualFolder:
   name: <virtual_root>
   files: []
@@ -106,10 +110,16 @@ targets:
         - Drivers/CMSIS/DSP/Include
         - FFT
         - HMI
+        - My_APL
+        - My_BLL
+        - My_HDl
+        - My_FML
+        - My_SPI
         - .cmsis/include
         - MDK-ARM/RTE/_D_AD9833_AD8703
       libList: []
-    excludeList: []
+    excludeList:
+      - <virtual_root>/My_SPI
     settings: {}
     toolchain: AC5
     toolchainConfigMap:
