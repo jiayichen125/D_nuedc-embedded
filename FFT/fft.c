@@ -111,11 +111,7 @@ void window(void)
         for (int i = 0; i < ADC_LEN; i++)
         {
             float x = 2.0f * PI * i / (ADC_LEN - 1);
-            Window_OutputBuffer[i] = a0
-                                   - a1 * cosf(x)
-                                   + a2 * cosf(2.0f * x)
-                                   - a3 * cosf(3.0f * x)
-                                   + a4 * cosf(4.0f * x);
+            Window_OutputBuffer[i] = a0 - a1 * cosf(x) + a2 * cosf(2.0f * x) - a3 * cosf(3.0f * x) + a4 * cosf(4.0f * x);
         }
         /* 窗函数增益系数*/
         window_power_correction = 1.55f;
@@ -329,7 +325,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
 {
     /* 第①步：切换 HMI 到曲线页面，清除旧波形 */
     printf("page %d\xff\xff\xff", SWEEP_HMI_PAGE);
-    HMI_Wave_Clear("sweep_wf", 0);
+    HMI_Wave_Clear("s0.id", 0);
 
     /* 第②步~第⑤步：频率循环 */
     for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
@@ -346,7 +342,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
 
         float Au_dB = 0.0f;
 
-        if (f < 100000U)
+        if (f < 8000U)
         {
             /* 第④步（低频路径）：FFT 计算 U0 和 Ui 幅值，求增益 */
             float U0_Ampl, Ui_Ampl;
@@ -359,17 +355,46 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
         }
         else
         {
-            /* 第④步（高频路径）：读 ADC_8307[] 均值，换算 Vrms，再和 Ui 比较求增益 */
+            /* 第④步（高频路径）：AD8307均值 → U0_vrms
+             * ADC_Ui 去直流后 RMS → Ui_vrms，求增益
+             * AD8307 参数：斜率 25mV/dB，截距 -84dBm，负载 50Ω */
+            uint32_t adc_sum = 0;
+            for (int i = 0; i < ADC_LEN; i++)
+            {
+                adc_sum += ADC_8307[i];
+            }
+            float adc_avg = adc_sum / (float)ADC_LEN;
+            float v_adc = adc_avg * 3.3f / 65535.0f;
+            float p_dbm = v_adc / 0.025f + (-84.0f);
+            float U0_vrms = sqrtf(50.0f * powf(10.0f, (p_dbm - 30.0f) / 10.0f));
 
+            /* Ui：去直流后 RMS */
+            float ui_sum = 0.0f;
+            for (int i = 0; i < ADC_LEN; i++)
+                ui_sum += (float)ADC_Ui[i];
+            float ui_dc = ui_sum / (float)ADC_LEN;
+            float ui_sq = 0.0f;
+            for (int i = 0; i < ADC_LEN; i++)
+            {
+                float v = (float)ADC_Ui[i] - ui_dc;
+                ui_sq += v * v;
+            }
+            float Ui_vrms = sqrtf(ui_sq / (float)ADC_LEN) * 3.3f / 65535.0f;
+
+            if (Ui_vrms > 1e-6f)
+                Au_dB = 20.0f * log10f(U0_vrms / Ui_vrms);
+            else
+                Au_dB = 0.0f;
         }
 
         /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点
          * 当前映射范围：-40dB ~ +40dB → 0 ~ 255，可按实际量程调整 */
         uint8_t hmi_val = (uint8_t)((Au_dB + 40.0f) * 255.0f / 80.0f);
-        HMI_Wave("sweep_wf", 0, hmi_val);
+        HMI_Wave("s0.id", 0, hmi_val);
     }
 
     /* 扫频结束后恢复 AD9833 到初始测量频率 */
+    ad9833_set_freq_ch(1000, ad9833_Sine, ad9833_CH0);
 }
 
 /**
@@ -395,8 +420,8 @@ void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_i
      *     *FFT_Ampl = *FFT_mag_max;
      */
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
-    FFT_Freq  = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
-    * FFT_Ampl =* FFT_mag_max;
+    FFT_Freq = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
+    *FFT_Ampl = *FFT_mag_max;
 }
 
 /**

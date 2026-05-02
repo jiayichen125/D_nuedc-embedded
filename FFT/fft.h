@@ -11,8 +11,7 @@
 #include "ad9833.h"
 
 /* 扫频时 HMI 曲线页面编号，根据实际 Nextion 工程修改 */
-#define SWEEP_HMI_PAGE  1
-
+#define SWEEP_HMI_PAGE  2
 
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl);
 void window(void);
