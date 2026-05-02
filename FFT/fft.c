@@ -23,7 +23,7 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #define rank 2       // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
 
 #ifndef FFT_DEBUG_UART
-#define FFT_DEBUG_UART 1
+#define FFT_DEBUG_UART 0
 #endif
 
 #ifndef FFT_DEBUG_DUMP_ADC
@@ -39,7 +39,7 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #endif
 
 #ifndef FFT_ENABLE_HMI_OUTPUT
-#define FFT_ENABLE_HMI_OUTPUT 0
+#define FFT_ENABLE_HMI_OUTPUT 1
 #endif
 
 /* -----------------------------------------------------------------------
@@ -117,7 +117,7 @@ static void FFT_Debug_Print_F32(const char *type, uint32_t frame_id, const char 
                buffer[i]);
     }
 }
-#endif
+#endif /* FFT_DEBUG_UART */
 
 /* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
 void showdata(float *buffer, uint16_t n)
@@ -243,10 +243,12 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     printf("META,%lu,%s,ADC_LEN,%u\r\n", (unsigned long)debug_frame_id, debug_name, (unsigned int)ADC_LEN);
     printf("META,%lu,%s,WINDOW_GAIN,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, window_power_correction);
     printf("META,%lu,%s,DC,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, DC);
+#endif
+
 #if FFT_DEBUG_DUMP_ADC
     FFT_Debug_Print_U16("ADC", debug_frame_id, debug_name, ADC_Buffer, ADC_LEN);
 #endif
-#endif
+/* FFT_DEBUG_UART */
 
     /* 步骤3: 填充复数输入，去直流 + 加窗，虚部置0 */
     for (int i = 0; i < ADC_LEN; i++)
@@ -283,9 +285,18 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
 
 #if FFT_DEBUG_UART
+    printf("RESULT,%lu,%s,DC_V,%.4f\r\n",
+           (unsigned long)debug_frame_id, debug_name,
+           DC * 3.3f / 65535.0f);
+    printf("RESULT,%lu,%s,AMPL_VPP,%.4f\r\n",
+           (unsigned long)debug_frame_id, debug_name,
+           (*ampl) * 2.0f * 3.3f / 65535.0f);
+#endif
+
 #if FFT_DEBUG_DUMP_MAG
     FFT_Debug_Print_F32("MAG", debug_frame_id, debug_name, FFT_mag, FFT_DEBUG_MAG_BINS);
 #endif
+#if FFT_DEBUG_UART
     printf("RESULT,%lu,%s,MAX_BIN,%lu\r\n",
            (unsigned long)debug_frame_id,
            debug_name,
@@ -584,5 +595,5 @@ void ADC_FFT_Get_Wave_Mes(uint32_t FFT_mag_max_index, float fs, float *FFT_Ampl,
 
     f = DatePower1 / DatePower2;
     *Freq = f * fs / FFT_LEN;
-    *FFT_Ampl = sqrtf(DatePower2);
+    *FFT_Ampl = FFT_mag[FFT_mag_max_index];
 }

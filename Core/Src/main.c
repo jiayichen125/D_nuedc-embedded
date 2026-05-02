@@ -189,7 +189,6 @@ int main(void)
             Calculate_Input_Impedance(Rs);
             Calculate_Output_Impedance(RL);
             Calculate_Gain();
-
             Start_ADC_Capture();
         }
     /* USER CODE END WHILE */
