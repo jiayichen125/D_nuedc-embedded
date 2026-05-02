@@ -343,20 +343,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
  */
 void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index,float *FFT_Ampl)
 {
-    /*
-     * 幅值精度建议：
-     * 这里从 bin 0 开始找最大值，DC 偏置或低频泄漏可能干扰峰值搜索。
-     * 测正弦基波幅值时，可考虑从 bin 2 开始：
-     *
-     *     arm_max_f32(&FFT_mag[2], FFT_LEN / 2 - 2,
-     *                 FFT_mag_max, FFT_mag_max_index);
-     *     *FFT_mag_max_index += 2;
-     *
-     * 另外，下面的 "FFT_Ampl = FFT_mag_max;" 只是修改本地指针，
-     * 不会把幅值写回调用者。如果希望本函数输出幅值，应改为：
-     *
-     *     *FFT_Ampl = *FFT_mag_max;
-     */
+
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
     FFT_Freq  = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
     * FFT_Ampl =* FFT_mag_max;
