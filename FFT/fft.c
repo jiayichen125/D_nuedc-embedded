@@ -22,6 +22,22 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #define ADC_LEN 1024 // ADC 采样点数，与 FFT_LEN 保持一致
 #define rank 2       // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
 
+#ifndef FFT_DEBUG_UART
+#define FFT_DEBUG_UART 0
+#endif
+
+#ifndef FFT_DEBUG_DUMP_ADC
+#define FFT_DEBUG_DUMP_ADC 0
+#endif
+
+#ifndef FFT_DEBUG_DUMP_MAG
+#define FFT_DEBUG_DUMP_MAG 0
+#endif
+
+#ifndef FFT_DEBUG_MAG_BINS
+#define FFT_DEBUG_MAG_BINS (FFT_LEN / 2)
+#endif
+
 /* -----------------------------------------------------------------------
  * 全局变量
  * ----------------------------------------------------------------------- */
@@ -55,6 +71,49 @@ float IFFT_Output[FFT_LEN];
 uint8_t EnableWindow = 1;                    // 1=使能 Flat Top 窗，0=矩形窗
 float Window_OutputBuffer[ADC_LEN];          // 窗函数系数缓存
 static float window_power_correction = 1.0f; // 窗函数幅值补偿系数（Flat Top≈4.63867）
+
+#if FFT_DEBUG_UART
+static uint32_t fft_debug_frame_id = 0;
+
+static const char *FFT_Debug_BufferName(const uint16_t *buffer)
+{
+    if (buffer == ADC_Us)
+        return "US";
+    if (buffer == ADC_U0)
+        return "U0";
+    if (buffer == ADC_Ui)
+        return "UI";
+    if (buffer == ADC_8307)
+        return "AD8307";
+    return "UNKNOWN";
+}
+
+static void FFT_Debug_Print_U16(const char *type, uint32_t frame_id, const char *name, const uint16_t *buffer, uint16_t len)
+{
+    for (uint16_t i = 0; i < len; i++)
+    {
+        printf("%s,%lu,%s,%u,%u\r\n",
+               type,
+               (unsigned long)frame_id,
+               name,
+               (unsigned int)i,
+               (unsigned int)buffer[i]);
+    }
+}
+
+static void FFT_Debug_Print_F32(const char *type, uint32_t frame_id, const char *name, const float *buffer, uint16_t len)
+{
+    for (uint16_t i = 0; i < len; i++)
+    {
+        printf("%s,%lu,%s,%u,%.6f\r\n",
+               type,
+               (unsigned long)frame_id,
+               name,
+               (unsigned int)i,
+               buffer[i]);
+    }
+}
+#endif
 
 /* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
 void showdata(float *buffer, uint16_t n)
@@ -152,6 +211,10 @@ void window(void)
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
 {
     uint32_t adc_sum = 0;
+#if FFT_DEBUG_UART
+    uint32_t debug_frame_id = ++fft_debug_frame_id;
+    const char *debug_name = FFT_Debug_BufferName(ADC_Buffer);
+#endif
     /* ampl 是 FFT_Ampl 的本地副本，传给重心插值函数使用 */
     float *ampl;
     ampl = FFT_Ampl;
@@ -169,6 +232,17 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
 
     /* 步骤2: 生成窗函数系数 */
     window();
+
+#if FFT_DEBUG_UART
+    printf("BEGIN,%lu,%s\r\n", (unsigned long)debug_frame_id, debug_name);
+    printf("META,%lu,%s,FS,%.3f\r\n", (unsigned long)debug_frame_id, debug_name, fs);
+    printf("META,%lu,%s,ADC_LEN,%u\r\n", (unsigned long)debug_frame_id, debug_name, (unsigned int)ADC_LEN);
+    printf("META,%lu,%s,WINDOW_GAIN,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, window_power_correction);
+    printf("META,%lu,%s,DC,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, DC);
+#if FFT_DEBUG_DUMP_ADC
+    FFT_Debug_Print_U16("ADC", debug_frame_id, debug_name, ADC_Buffer, ADC_LEN);
+#endif
+#endif
 
     /* 步骤3: 填充复数输入，去直流 + 加窗，虚部置0 */
     for (int i = 0; i < ADC_LEN; i++)
@@ -203,6 +277,19 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     /* 步骤8: 找峰值 bin，再用重心插值精化频率和幅值 */
     Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index, ampl);
     ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
+
+#if FFT_DEBUG_UART
+#if FFT_DEBUG_DUMP_MAG
+    FFT_Debug_Print_F32("MAG", debug_frame_id, debug_name, FFT_mag, FFT_DEBUG_MAG_BINS);
+#endif
+    printf("RESULT,%lu,%s,MAX_BIN,%lu\r\n",
+           (unsigned long)debug_frame_id,
+           debug_name,
+           (unsigned long)FFT_mag_max_index);
+    printf("RESULT,%lu,%s,FREQ_HZ,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, FFT_Freq);
+    printf("RESULT,%lu,%s,AMPL,%.6f\r\n", (unsigned long)debug_frame_id, debug_name, *ampl);
+    printf("END,%lu,%s\r\n", (unsigned long)debug_frame_id, debug_name);
+#endif
 }
 
 /**
