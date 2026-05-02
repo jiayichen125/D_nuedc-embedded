@@ -439,13 +439,7 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
 {
     for (uint8_t iter = 0; iter < UI_AMP_LOCK_MAX_ITER; iter++)
     {
-        /* 采集一帧新的 ADC 数据。
-         * 采样完成后，main.c 中的 Split_ADC_Buffers() 会更新：
-         *   ADC_Us[]
-         *   ADC_Ui[]
-         *   ADC_U0[]
-         *   ADC_8307[]
-         */
+    
         if (Acquire_All_ADC_Samples_Blocking(200U) != 1U)
         {
             return 0U;
@@ -482,6 +476,7 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
         /* 根据比例调整 PGA 幅值码。
          * 正向情况：amp_code 越大，输出越大
          * 反向情况：amp_code 越大，输出越小
+         先自己測量在ad9833_set_amplitude(128/64)的情況下，Ui_Ampl的值，然後調整AD9833_AMP_REVERSE的值
          */
 #if AD9833_AMP_REVERSE
         float next_code = (float)ad9833_amp_code / ratio;
@@ -504,7 +499,7 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
         ad9833_set_amplitude(ad9833_amp_code);
 
         /* 等待 PGA 输出和后级滤波/跟随器稳定。 */
-        HAL_Delay(2);
+        HAL_Delay(10);
     }
 
     /* 达到最大迭代次数仍未进入误差范围，认为锁定失败。 */
@@ -643,7 +638,4 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
     /* 扫频结束后恢复 AD9833 到初始测量频率 */
     ad9833_set_freq_ch(1000, ad9833_Sine, ad9833_CH0);
 }
-
-
-
 
