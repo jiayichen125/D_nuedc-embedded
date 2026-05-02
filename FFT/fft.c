@@ -18,9 +18,9 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 /* -----------------------------------------------------------------------
  * 宏定义
  * ----------------------------------------------------------------------- */
-#define FFT_LEN 1024   // FFT 点数，必须是2的幂
-#define ADC_LEN 1024   // ADC 采样点数，与 FFT_LEN 保持一致
-#define rank    2      // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
+#define FFT_LEN 1024 // FFT 点数，必须是2的幂
+#define ADC_LEN 1024 // ADC 采样点数，与 FFT_LEN 保持一致
+#define rank 2       // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
 
 /* -----------------------------------------------------------------------
  * 全局变量
@@ -34,13 +34,13 @@ int BaseIdx = 0;      // 基波在 FFT 幅度谱中的下标
  * 注意：测量高频时需提高 TIM3 触发频率并同步修改此值 */
 float fs = 20000.0f;
 
-float FFT_Freq  = 0;   // 当前帧 FFT 计算得到的基波频率 (Hz)
-float FFT_Ampl1 = 0;   // FFT_Process 输出幅值暂存 (第1路)
-float FFT_Ampl2 = 0;   // FFT_Process 输出幅值暂存 (第2路)
-float DC = 0;          // 直流偏置（各采样点均值），FFT 前去除以消除直流分量
+float FFT_Freq = 0;  // 当前帧 FFT 计算得到的基波频率 (Hz)
+float FFT_Ampl1 = 0; // FFT_Process 输出幅值暂存 (第1路)
+float FFT_Ampl2 = 0; // FFT_Process 输出幅值暂存 (第2路)
+float DC = 0;        // 直流偏置（各采样点均值），FFT 前去除以消除直流分量
 
-float FFT_mag_max = 0;           // 幅度谱峰值（归一化后）
-uint32_t FFT_mag_max_index = 0;  // 幅度谱峰值所在 bin 下标
+float FFT_mag_max = 0;          // 幅度谱峰值（归一化后）
+uint32_t FFT_mag_max_index = 0; // 幅度谱峰值所在 bin 下标
 
 /* -----------------------------------------------------------------------
  * FFT 运算缓冲区
@@ -52,8 +52,8 @@ float FFT_Input[FFT_LEN * 2];
 float FFT_mag[FFT_LEN];
 float IFFT_Output[FFT_LEN];
 
-uint8_t EnableWindow = 1;                 // 1=使能 Hanning 窗，0=矩形窗
-float Window_OutputBuffer[ADC_LEN];       // 窗函数系数缓存
+uint8_t EnableWindow = 1;                    // 1=使能 Hanning 窗，0=矩形窗
+float Window_OutputBuffer[ADC_LEN];          // 窗函数系数缓存
 static float window_power_correction = 1.0f; // 窗函数功率补偿系数（Hanning=1.5）
 
 /* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
@@ -72,6 +72,29 @@ void showdata(float *buffer, uint16_t n)
  * 会在 FFT 结果中产生频谱泄漏（旁瓣），导致相邻频率干扰。
  * Hanning 窗能将旁瓣衰减约 31dB，适合单音正弦波的幅值测量。
  *
+ * 若目标优先是“幅值精度”而不是“频率分辨率”，可考虑改为 Flat Top 窗：
+ *   w[i] = a0
+ *        - a1*cos(2*pi*i/(N-1))
+ *        + a2*cos(4*pi*i/(N-1))
+ *        - a3*cos(6*pi*i/(N-1))
+ *        + a4*cos(8*pi*i/(N-1))
+ *   常用系数：
+ *        a0 = 0.21557895f
+ *        a1 = 0.41663158f
+ *        a2 = 0.277263158f
+ *        a3 = 0.083578947f
+ *        a4 = 0.006947368f
+ *
+ * Flat Top 窗的典型用途是扫频幅频特性测量：每个频点只有一个主频时，
+ * 它可以明显减小频率未落在 FFT bin 中心造成的幅值起伏，使曲线更平滑、
+ * 幅值更接近真实值。代价是主瓣更宽、频率分辨能力下降、噪声底上升；
+ * 若高频端曲线抖动，可配合多帧平均。
+ *
+ * 注意：做正弦幅值测量时，窗函数补偿建议使用“相干增益”补偿。
+ * 上述 Flat Top 系数的相干增益约为 0.21557895，因此幅值补偿因子约为：
+ *        1.0f / 0.21557895f = 4.63867f
+ * 也就是下面的 window_power_correction 若按幅值补偿理解，可改为约 4.63867f。
+ *
  * 代价：频率分辨率降低约一半（主瓣变宽），但对本题影响可接受。
  * 使用 EnableWindow=0 可切换为矩形窗（仅调试用）。
  */
@@ -79,13 +102,21 @@ void window(void)
 {
     if (EnableWindow)
     {
-        for (int i = 0; i < ADC_LEN; i++)
+        float a0 = 0.21557895 ;
+        float a1 = 0.41663158 ;
+        float a2 = 0.277263158 ;
+        float a3 = 0.083578947 ;
+        float a4 = 0.006947368 ;
+
+            for (int i = 0; i < ADC_LEN; i++)
         {
             float tempCos = cosf(2.0f * PI * i / (ADC_LEN - 1));
-            Window_OutputBuffer[i] = 0.5f * (1.0f - tempCos);
+            // Window_OutputBuffer[i] = 0.5f * (1.0f - tempCos);
+            Window_OutputBuffer[i] = a0 - a1 * cos(2 * PI * i / (FFT_LEN - 1)) + a2 * cos(4 * PI * i / (FFT_LEN - 1)) - a3 * cos(6 * PI * i / (FFT_LEN - 1)) + a4 * cos(8 * PI * i / (FFT_LEN - 1));
         }
         /* 窗函数增益系数*/
-        window_power_correction = 1.5f;
+        // window_power_correction = 1.5f;
+        window_power_correction = 4.64f; // Flat Top 窗的幅值补偿因子（相干增益的倒数）
     }
     else
     {
@@ -140,7 +171,7 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     /* 步骤3: 填充复数输入，去直流 + 加窗，虚部置0 */
     for (int i = 0; i < ADC_LEN; i++)
     {
-        FFT_Input[i * 2]     = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
+        FFT_Input[i * 2] = ((float)ADC_Buffer[i] - DC) * Window_OutputBuffer[i];
         FFT_Input[i * 2 + 1] = 0.0f;
     }
 
@@ -153,7 +184,12 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     /* 步骤6+7: 归一化 + 窗函数功率补偿
      * DC(i=0): /N
      * 其余:    *2/N  （合并单、双边谱到单边峰值）
-     * 再乘 window_power_correction 补偿窗函数能量损失 */
+     * 再乘 window_power_correction 补偿窗函数能量损失
+     *
+     * 若后续改为 Flat Top 做幅频曲线测量，通常保留这里的 *2/N 单边谱归一化，
+     * 只把 window() 中的窗公式和 window_power_correction 换成 Flat Top 对应值。
+     * 对单频扫频，Flat Top 会降低每个频点因 bin 偏移导致的幅值误差；
+     * 对相邻多频分量分析，则会因主瓣更宽而更难分辨。 */
     for (uint16_t i = 0; i < FFT_LEN; i++)
     {
         if (i == 0)
@@ -163,7 +199,7 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     }
 
     /* 步骤8: 找峰值 bin，再用重心插值精化频率和幅值 */
-    Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index,ampl);
+    Process_FFT_mag(FFT_mag, &FFT_mag_max, &FFT_mag_max_index, ampl);
     ADC_FFT_Get_Wave_Mes(FFT_mag_max_index, fs, ampl, &FFT_Freq, 2);
 }
 
@@ -292,8 +328,8 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
     /* 第①步：切换 HMI 到曲线页面，清除旧波形 */
     printf("page %d\xff\xff\xff", SWEEP_HMI_PAGE);
     HMI_Wave_Clear("sweep_wf", 0);
-    
-        /* 第②步~第⑤步：频率循环 */
+
+    /* 第②步~第⑤步：频率循环 */
     for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
     {
         /* 第②步：设置 AD9833 频率，等待输出稳定 */
@@ -318,7 +354,6 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
                 Au_dB = 20.0f * log10f(U0_Ampl / Ui_Ampl);
             else
                 Au_dB = 0.0f;
-
         }
         else
         {
@@ -340,10 +375,10 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
  * 只搜索 [0, FFT_LEN/2) 范围，因为 FFT 输出后半段是前半段的镜像（共轭对称）。
  * 同时更新全局 FFT_Freq（粗略频率）和 FFT_Ampl1（峰值幅度）。
  */
-void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index,float *FFT_Ampl)
+void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_index, float *FFT_Ampl)
 {
     arm_max_f32(FFT_mag, FFT_LEN / 2, FFT_mag_max, FFT_mag_max_index);
-    FFT_Freq  = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
+    FFT_Freq = (float)(*FFT_mag_max_index) * fs / (float)FFT_LEN;
     FFT_Ampl = FFT_mag_max;
 }
 
