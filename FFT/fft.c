@@ -22,12 +22,49 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #define ADC_LEN 1024 // ADC 采样点数，与 FFT_LEN 保持一致
 #define rank 2       // 每个 ADC 的扫描通道数（用于主缓冲区大小计算）
 
+#define HMI_AU_MIN_DB (-80.0f) // hmi映射范围
+#define HMI_AU_MAX_DB (80.0f)
+
+#define AD8307_SLOPE_V_PER_DB (0.025f) // 25 mV/dB，后续实测标定
+#define AD8307_INTERCEPT_DBM (-84.0f)  // 典型截距，后续实测标定
+#define AD8307_LOAD_OHM (50.0f)        // AD8307 输入等效负载/系统阻抗
+#define AD8307_NOISE_FLOOR_VRMS (0.0f)
+
+/* 目标 Ui 幅值。
+ * 注意：这里的单位不是伏特，而是 FFT_Process() 输出的 ADC LSB 幅值。
+ * 建议先固定 1kHz 输出，观察 FFT_Process(ADC_Ui, &Ui_Ampl) 得到的正常值，
+ * 再把这个值填到 UI_TARGET_AMP_LSB。
+ */
+#define UI_TARGET_AMP_LSB        (2000.0f) 
+#define UI_AMP_TOLERANCE         (0.03f) //允許誤差
+#define UI_AMP_LOCK_MAX_ITER     (8U) //條幅次數
+/* PGA/数字电位器幅值码范围。
+ * 你的 ad9833_set_amplitude() 使用 0~255。
+ * 最小值建议用 1，避免输出完全为 0 后闭环恢复困难。
+ */
+#define AD9833_AMP_CODE_MIN      (1U)
+#define AD9833_AMP_CODE_MAX      (255U)
+#define AD9833_AMP_CODE_INIT     (128U)
+/* 幅值码调节方向。
+ * 如果测试发现 amp_code 越大，Ui 幅值越大，保持 0。
+ * 如果测试发现 amp_code 越大，Ui 幅值越小，改成 1。
+ */
+#define AD9833_AMP_REVERSE       (0U)
+
 /* -----------------------------------------------------------------------
  * 全局变量
  * ----------------------------------------------------------------------- */
 uint8_t ifftFlag = 0;
-uint8_t adc_flag = 0; // 用于重新采集 U∞ 的标志（Zo 测量时使用）
-int BaseIdx = 0;      // 基波在 FFT 幅度谱中的下标
+uint8_t adc_flag = 0;     // 用于重新采集 U∞ 的标志（Zo 测量时使用）
+int BaseIdx = 0;          // 基波在 FFT 幅度谱中的下标
+volatile uint8_t hmi_val; // 临时加上 用于查看变量值 原出于342行
+static float ad8307_noise_watt = 0.0f;
+
+/* 当前 PGA/数字电位器幅值码。
+ * 用 static 保存，扫频下一个频点会沿用上一个频点的幅值码，
+ * 这样调节更快。
+ */
+static uint8_t ad9833_amp_code = AD9833_AMP_CODE_INIT;
 
 /* fs: 采样率，决定 FFT 频率分辨率 = fs/FFT_LEN
  * 例：fs=20kHz, FFT_LEN=1024 → 分辨率≈19.5Hz，最高可分析 10kHz 信号
@@ -65,53 +102,14 @@ void showdata(float *buffer, uint16_t n)
     }
 }
 
-/**
- * @brief 计算 Flat Top 窗系数并写入 Window_OutputBuffer[]
- *
- * 为何需要加窗：ADC 采样的有限长度序列相当于乘以矩形窗，
- * 会在 FFT 结果中产生频谱泄漏（旁瓣），导致相邻频率干扰。
- * Flat Top 窗适合单音正弦波的幅值测量，可减小频率未落在 FFT bin 中心时的幅值误差。
- *
- * 若目标优先是“幅值精度”而不是“频率分辨率”，可考虑改为 Flat Top 窗：
- *   w[i] = a0
- *        - a1*cos(2*pi*i/(N-1))
- *        + a2*cos(4*pi*i/(N-1))
- *        - a3*cos(6*pi*i/(N-1))
- *        + a4*cos(8*pi*i/(N-1))
- *   常用系数：
- *        a0 = 0.21557895f
- *        a1 = 0.41663158f
- *        a2 = 0.277263158f
- *        a3 = 0.083578947f
- *        a4 = 0.006947368f
- *
- * Flat Top 窗的典型用途是扫频幅频特性测量：每个频点只有一个主频时，
- * 它可以明显减小频率未落在 FFT bin 中心造成的幅值起伏，使曲线更平滑、
- * 幅值更接近真实值。代价是主瓣更宽、频率分辨能力下降、噪声底上升；
- * 若高频端曲线抖动，可配合多帧平均。
- *
- * 注意：做正弦幅值测量时，窗函数补偿建议使用“相干增益”补偿。
- * 上述 Flat Top 系数的相干增益约为 0.21557895，因此幅值补偿因子约为：
- *        1.0f / 0.21557895f = 4.63867f
- * 也就是下面的 window_power_correction 若按幅值补偿理解，可改为约 4.63867f。
- *
- * 代价：频率分辨率降低约一半（主瓣变宽），但对本题影响可接受。
- * 使用 EnableWindow=0 可切换为矩形窗（仅调试用）。
- */
 void window(void)
 {
     if (EnableWindow)
     {
-        float a0 = 0.21557895f;
-        float a1 = 0.41663158f;
-        float a2 = 0.277263158f;
-        float a3 = 0.083578947f;
-        float a4 = 0.006947368f;
-
         for (int i = 0; i < ADC_LEN; i++)
         {
-            float x = 2.0f * PI * i / (ADC_LEN - 1);
-            Window_OutputBuffer[i] = a0 - a1 * cosf(x) + a2 * cosf(2.0f * x) - a3 * cosf(3.0f * x) + a4 * cosf(4.0f * x);
+            float tempCos = cosf(2.0f * PI * i / (ADC_LEN - 1));
+            Window_OutputBuffer[i] = 0.5f * (1.0f - tempCos);
         }
         /* 窗函数增益系数*/
         window_power_correction = 1.55f;
@@ -148,10 +146,10 @@ void window(void)
 void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
 {
     uint32_t adc_sum = 0;
-    /* ampl 是 FFT_Ampl 的本地副本，传给重心插值函数使用 */
     float *ampl;
     ampl = FFT_Ampl;
 
+    /*清空缓存区*/
     memset(FFT_Input, 0, sizeof(FFT_Input));
     memset(FFT_mag, 0, sizeof(FFT_mag));
     memset(FFT_Output, 0, sizeof(FFT_Output));
@@ -179,15 +177,7 @@ void FFT_Process(uint16_t *ADC_Buffer, float *FFT_Ampl)
     /* 步骤5: 计算各 bin 复数模（幅度谱）*/
     arm_cmplx_mag_f32(FFT_Input, FFT_mag, FFT_LEN);
 
-    /* 步骤6+7: 归一化 + 窗函数功率补偿
-     * DC(i=0): /N
-     * 其余:    *2/N  （合并单、双边谱到单边峰值）
-     * 再乘 window_power_correction 补偿窗函数能量损失
-     *
-     * 若后续改为 Flat Top 做幅频曲线测量，通常保留这里的 *2/N 单边谱归一化，
-     * 只把 window() 中的窗公式和 window_power_correction 换成 Flat Top 对应值。
-     * 对单频扫频，Flat Top 会降低每个频点因 bin 偏移导致的幅值误差；
-     * 对相邻多频分量分析，则会因主瓣更宽而更难分辨。 */
+    /* 步骤6+7: 归一化 + 窗函数功率补偿 */
     for (uint16_t i = 0; i < FFT_LEN; i++)
     {
         if (i == 0)
@@ -286,117 +276,6 @@ void Calculate_Gain(void)
     HMI_send_float("x2", Au);
 }
 
-/* -----------------------------------------------------------------------
- * 扫频幅频特性测量（待实现）
- *
- * 目标：在 start_hz ~ stop_hz 范围内步进扫频，逐点测量增益 Av(dB)，
- *       在 HMI 波形控件上绘制幅频特性曲线。
- *
- * 实现步骤（每个频率点）：
- *   ① ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0) 设置当前频率
- *   ② HAL_Delay(5) 等待 AD9833 输出稳定（约 1~2 个信号周期）
- *   ③ Acquire_All_ADC_Samples_Blocking(200) 重新采样一帧
- *   ④ 判断频率范围：
- *      f < 100000Hz → FFT 路径：FFT_Process(U0) / FFT_Process(Ui) → Av
- *      f >= 100000Hz → AD8307 路径：读 ADC_8307[] 均值 → 换算 Vrms → Av
- *   ⑤ 将 Av 映射到 HMI 波形控件坐标（0~255），调用 HMI_Wave()
- *   ⑥ f += step_hz，循环直到 f > stop_hz
- *
- * AD8307 换算公式（斜率 25mV/dB，截距 -84dBm，负载 50Ω）：
- *   v_adc  = ADC_8307_avg * 3.3f / 65535.0f
- *   p_dbm  = v_adc / 0.025f + (-84.0f)
- *   Vrms   = sqrtf(50.0f * powf(10.0f, (p_dbm - 30.0f) / 10.0f))
- *
- * 注意事项：
- *   - 扫频前调用 HMI_Wave_Clear() 清除上次曲线
- *   - 扫频前切换 HMI 页面到曲线页（page sweep_page_id）
- *   - 高频段 fs 需要对应提高（修改 TIM3 ARR），或提前完成高频率程序
- *   - 扫频结束后恢复 AD9833 到初始频率
- * ----------------------------------------------------------------------- */
-
-/**
- * @brief 扫频幅频特性测量
- *
- * @param start_hz  起始频率 (Hz)
- * @param stop_hz   终止频率 (Hz)
- * @param step_hz   步进频率 (Hz)
- */
-void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
-{
-    /* 第①步：切换 HMI 到曲线页面，清除旧波形 */
-    printf("page %d\xff\xff\xff", SWEEP_HMI_PAGE);
-    HMI_Wave_Clear("s0.id", 0);
-
-    /* 第②步~第⑤步：频率循环 */
-    for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
-    {
-        /* 第②步：设置 AD9833 频率，等待输出稳定 */
-        ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0);
-        HAL_Delay(5);
-
-        /* 第③步：触发一次新采样，若超时则跳过本频率点 */
-        if (Acquire_All_ADC_Samples_Blocking(200U) != 1U)
-        {
-            continue;
-        }
-
-        float Au_dB = 0.0f;
-
-        if (f < 8000U)
-        {
-            /* 第④步（低频路径）：FFT 计算 U0 和 Ui 幅值，求增益 */
-            float U0_Ampl, Ui_Ampl;
-            FFT_Process(ADC_U0, &U0_Ampl);
-            FFT_Process(ADC_Ui, &Ui_Ampl);
-            if (Ui_Ampl > 1e-6f)
-                Au_dB = 20.0f * log10f(U0_Ampl / Ui_Ampl);
-            else
-                Au_dB = 0.0f;
-        }
-        else
-        {
-            /* 第④步（高频路径）：AD8307均值 → U0_vrms
-             * ADC_Ui 去直流后 RMS → Ui_vrms，求增益
-             * AD8307 参数：斜率 25mV/dB，截距 -84dBm，负载 50Ω */
-            uint32_t adc_sum = 0;
-            for (int i = 0; i < ADC_LEN; i++)
-            {
-                adc_sum += ADC_8307[i];
-            }
-            float adc_avg = adc_sum / (float)ADC_LEN;
-            float v_adc = adc_avg * 3.3f / 65535.0f;
-            float p_dbm = v_adc / 0.025f + (-84.0f);
-            float U0_vrms = sqrtf(50.0f * powf(10.0f, (p_dbm - 30.0f) / 10.0f));
-
-            /* Ui：去直流后 RMS */
-            float ui_sum = 0.0f;
-            for (int i = 0; i < ADC_LEN; i++)
-                ui_sum += (float)ADC_Ui[i];
-            float ui_dc = ui_sum / (float)ADC_LEN;
-            float ui_sq = 0.0f;
-            for (int i = 0; i < ADC_LEN; i++)
-            {
-                float v = (float)ADC_Ui[i] - ui_dc;
-                ui_sq += v * v;
-            }
-            float Ui_vrms = sqrtf(ui_sq / (float)ADC_LEN) * 3.3f / 65535.0f;
-
-            if (Ui_vrms > 1e-6f)
-                Au_dB = 20.0f * log10f(U0_vrms / Ui_vrms);
-            else
-                Au_dB = 0.0f;
-        }
-
-        /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点
-         * 当前映射范围：-40dB ~ +40dB → 0 ~ 255，可按实际量程调整 */
-        uint8_t hmi_val = (uint8_t)((Au_dB + 40.0f) * 255.0f / 80.0f);
-        HMI_Wave("s0.id", 0, hmi_val);
-    }
-
-    /* 扫频结束后恢复 AD9833 到初始测量频率 */
-    ad9833_set_freq_ch(1000, ad9833_Sine, ad9833_CH0);
-}
-
 /**
  * @brief 在幅度谱前半段（单边谱）中找峰值 bin
  *
@@ -478,3 +357,293 @@ void ADC_FFT_Get_Wave_Mes(uint32_t FFT_mag_max_index, float fs, float *FFT_Ampl,
     *Freq = f * fs / FFT_LEN;
     *FFT_Ampl = sqrtf(DatePower2);
 }
+
+/**
+ * @brief AD8307 底噪修正
+ *
+ * @param update_noise
+ *        1 = 当前 ADC_8307[] 作为无信号底噪，更新 ad8307_noise_watt
+ *        0 = 当前 ADC_8307[] 作为正式测量值，扣除底噪后返回 U0_vrms
+ *
+ * @return 扣底噪后的 U0_vrms。
+ *         如果 update_noise=1，返回 0。
+ *         如果信号功率低于底噪，返回 AD8307_NOISE_FLOOR_VRMS。
+ *
+ * 原理：
+ *   AD8307 输出电压对应输入功率：
+ *
+ *       P_dBm = Vout / Slope + Intercept
+ *
+ *   但正式测量时：
+ *
+ *       P_total = P_signal + P_noise
+ *
+ *   所以必须先转成功率 W，再做：
+ *
+ *       P_signal = P_total - P_noise
+ *
+ *   不能直接用 dBm 相减，因为 dBm 是对数单位。
+ */
+float ad8307_noiseclean(uint8_t update_noise)
+{
+    uint32_t adc_sum = 0;
+
+    for (int i = 0; i < ADC_LEN; i++)
+    {
+        adc_sum += ADC_8307[i];
+    }
+
+    float adc_avg = adc_sum / (float)ADC_LEN;
+    float v_adc = adc_avg * 3.3f / 65536.0f;
+
+    float p_dbm = v_adc / AD8307_SLOPE_V_PER_DB + AD8307_INTERCEPT_DBM;
+    float p_watt = powf(10.0f, (p_dbm - 30.0f) / 10.0f);
+
+    if (update_noise)
+    {
+        ad8307_noise_watt = p_watt;
+        return 0.0f;
+    }
+
+    float p_signal_watt = p_watt - ad8307_noise_watt;
+
+    if (p_signal_watt <= 0.0f)
+    {
+        return AD8307_NOISE_FLOOR_VRMS;
+    }
+
+    return sqrtf(AD8307_LOAD_OHM * p_signal_watt);
+}
+
+/**閉環條幅度鎖定函數
+ * @brief 根据 ADC_Ui[] 闭环调节 AD9833 模块输出幅值
+ *
+ * 工作流程：
+ *   1. 采集一帧 ADC 数据，更新 ADC_Ui[]
+ *   2. 使用 FFT_Process(ADC_Ui, &Ui_Ampl) 得到输入端 Ui 的基波幅值
+ *   3. 将 Ui_Ampl 与目标 UI_TARGET_AMP_LSB 比较
+ *   4. 如果误差在允许范围内，认为锁定成功
+ *   5. 如果 Ui 偏小，就增大 PGA 幅值码
+ *      如果 Ui 偏大，就减小 PGA 幅值码
+ *   6. 重复若干次，直到幅值接近目标值
+ *
+ * 注意：
+ *   - 反馈点是 ADC_Ui[]，也就是放大器输入端。
+ *   - 不要用 ADC_U0 或 AD8307 做这个闭环，否则会把被测放大器的频响补平。
+ *   - 这个函数只负责“调源端幅值”，正式测量仍建议在函数返回后重新采一帧。
+ *
+ * @retval 1 幅值锁定成功
+ * @retval 0 幅值未锁定或采样失败
+ */
+uint8_t AD9833_Lock_Ui_Amplitude(void)
+{
+    for (uint8_t iter = 0; iter < UI_AMP_LOCK_MAX_ITER; iter++)
+    {
+        /* 采集一帧新的 ADC 数据。
+         * 采样完成后，main.c 中的 Split_ADC_Buffers() 会更新：
+         *   ADC_Us[]
+         *   ADC_Ui[]
+         *   ADC_U0[]
+         *   ADC_8307[]
+         */
+        if (Acquire_All_ADC_Samples_Blocking(200U) != 1U)
+        {
+            return 0U;
+        }
+
+        /* 用 FFT 提取 Ui 的基波幅值。
+         * Ui_Ampl 的单位是 ADC LSB，不是实际电压。
+         * 但闭环只关心比例，所以可以直接用。
+         */
+        float Ui_Ampl = 0.0f;
+        FFT_Process(ADC_Ui, &Ui_Ampl);
+
+        /* Ui 太小，说明信号源输出过低、采样异常或通道没接好。
+         * 此时继续用 ratio 调节可能导致异常放大。
+         */
+        if (Ui_Ampl <= 1e-6f)
+        {
+            return 0U;
+        }
+
+        /* 计算目标幅值与当前幅值的比例。
+         * ratio > 1：当前 Ui 偏小，需要增大输出
+         * ratio < 1：当前 Ui 偏大，需要减小输出
+         */
+        float ratio = UI_TARGET_AMP_LSB / Ui_Ampl;
+
+        /* 如果已经进入允许误差范围，认为恒幅完成。 */
+        if ((ratio > (1.0f - UI_AMP_TOLERANCE)) &&
+            (ratio < (1.0f + UI_AMP_TOLERANCE)))
+        {
+            return 1U;
+        }
+
+        /* 根据比例调整 PGA 幅值码。
+         * 正向情况：amp_code 越大，输出越大
+         * 反向情况：amp_code 越大，输出越小
+         */
+#if AD9833_AMP_REVERSE
+        float next_code = (float)ad9833_amp_code / ratio;
+#else
+        float next_code = (float)ad9833_amp_code * ratio;
+#endif
+
+        /* 限制幅值码范围，避免超过 0~255。 */
+        if (next_code < (float)AD9833_AMP_CODE_MIN)
+        {
+            next_code = (float)AD9833_AMP_CODE_MIN;
+        }
+        else if (next_code > (float)AD9833_AMP_CODE_MAX)
+        {
+            next_code = (float)AD9833_AMP_CODE_MAX;
+        }
+
+        /* 写入新的 PGA/数字电位器幅值码。 */
+        ad9833_amp_code = (uint8_t)next_code;
+        ad9833_set_amplitude(ad9833_amp_code);
+
+        /* 等待 PGA 输出和后级滤波/跟随器稳定。 */
+        HAL_Delay(2);
+    }
+
+    /* 达到最大迭代次数仍未进入误差范围，认为锁定失败。 */
+    return 0U;
+}
+
+
+/* -----------------------------------------------------------------------
+ * 扫频幅频特性测量（待实现）
+ *
+ * 目标：在 start_hz ~ stop_hz 范围内步进扫频，逐点测量增益 Av(dB)，
+ *       在 HMI 波形控件上绘制幅频特性曲线。
+ *
+ * 实现步骤（每个频率点）：
+ *   ① ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0) 设置当前频率
+ *   ② HAL_Delay(5) 等待 AD9833 输出稳定（约 1~2 个信号周期）
+ *   ③ Acquire_All_ADC_Samples_Blocking(200) 重新采样一帧
+ *   ④ 判断频率范围：
+ *      f < 100000Hz → FFT 路径：FFT_Process(U0) / FFT_Process(Ui) → Av
+ *      f >= 100000Hz → AD8307 路径：读 ADC_8307[] 均值 → 换算 Vrms → Av
+ *   ⑤ 将 Av 映射到 HMI 波形控件坐标（0~255），调用 HMI_Wave()
+ *   ⑥ f += step_hz，循环直到 f > stop_hz
+ *
+ * AD8307 换算公式（斜率 25mV/dB，截距 -84dBm，负载 50Ω）：
+ *   v_adc  = ADC_8307_avg * 3.3f / 65535.0f
+ *   p_dbm  = v_adc / 0.025f + (-84.0f)
+ *   Vrms   = sqrtf(50.0f * powf(10.0f, (p_dbm - 30.0f) / 10.0f))
+ *
+ * 注意事项：
+ *   - 扫频前调用 HMI_Wave_Clear() 清除上次曲线
+ *   - 扫频前切换 HMI 页面到曲线页（page sweep_page_id）
+ *   - 高频段 fs 需要对应提高（修改 TIM3 ARR），或提前完成高频率程序
+ *   - 扫频结束后恢复 AD9833 到初始频率
+ * ----------------------------------------------------------------------- */
+
+/**
+ * @brief 扫频幅频特性测量
+ *
+ * @param start_hz  起始频率 (Hz)
+ * @param stop_hz   终止频率 (Hz)
+ * @param step_hz   步进频率 (Hz)
+ */
+void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
+{
+    /* 关闭信号源输出 */
+    HAL_GPIO_WritePin(AD9833_Switch_GPIO_Port, AD9833_Switch_Pin, GPIO_PIN_RESET);
+    HAL_Delay(10);
+
+    if (Acquire_All_ADC_Samples_Blocking(200U) == 1U)
+    {
+        ad8307_noiseclean(1U);
+    }
+
+    /* 恢复信号源输出 */
+    HAL_GPIO_WritePin(AD9833_Switch_GPIO_Port, AD9833_Switch_Pin, GPIO_PIN_SET);
+    HAL_Delay(10);
+
+    /* 第②步~第⑤步：频率循环 */
+    for (uint32_t f = start_hz; f <= stop_hz; f += step_hz)
+    {
+        /* 第②步：设置 AD9833 频率，等待输出稳定 */
+        ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0);
+        HAL_Delay(5);
+
+        /* 闭环调 AD9833/PGA 幅值 */
+        AD9833_Lock_Ui_Amplitude();
+
+        /* 第③步：触发一次新采样，若超时则跳过本频率点 */
+        if (Acquire_All_ADC_Samples_Blocking(200U) != 1U)
+        {
+            continue;
+        }
+
+        float Au_dB = 0.0f;
+
+        if (f < 8000U)
+        {
+            /* 第④步（低频路径）：FFT 计算 U0 和 Ui 幅值，求增益 */
+            float U0_Ampl, Ui_Ampl;
+            FFT_Process(ADC_U0, &U0_Ampl);
+            FFT_Process(ADC_Ui, &Ui_Ampl);
+            if (Ui_Ampl > 1e-6f)
+                Au_dB = 20.0f * log10f(U0_Ampl / Ui_Ampl);
+            else
+                Au_dB = 0.0f;
+        }
+        else
+        {
+            /* 第④步（高频路径）：AD8307均值 → U0_vrms
+             * ADC_Ui 去直流后 RMS → Ui_vrms，求增益
+             * AD8307 参数：斜率 25mV/dB，截距 -84dBm，负载 50Ω */
+            uint32_t adc_sum = 0;
+            for (int i = 0; i < ADC_LEN; i++)
+            {
+                adc_sum += ADC_8307[i];
+            }
+            float adc_avg = adc_sum / (float)ADC_LEN;
+            float v_adc = adc_avg * 3.3f / 65536.0f;
+            float p_dbm = v_adc / (AD8307_SLOPE_V_PER_DB * 0.001f) + (AD8307_INTERCEPT_DBM);
+            float U0_vrms = ad8307_noiseclean(0U);
+
+            /* Ui：去直流后 RMS */
+            float ui_sum = 0.0f;
+            for (int i = 0; i < ADC_LEN; i++)
+                ui_sum += (float)ADC_Ui[i];
+            float ui_dc = ui_sum / (float)ADC_LEN;
+            float ui_sq = 0.0f;
+            for (int i = 0; i < ADC_LEN; i++)
+            {
+                float v = (float)ADC_Ui[i] - ui_dc;
+                ui_sq += v * v;
+            }
+            float Ui_vrms = sqrtf(ui_sq / (float)ADC_LEN) * 3.3f / 65536.0f;
+
+            if (Ui_vrms > 1e-6f)
+                Au_dB = 20.0f * log10f(U0_vrms / Ui_vrms);
+            else
+                Au_dB = 0.0f;
+
+            if ((U0_vrms > 0.0f) && (Ui_vrms > 1e-6f))
+            {
+                Au_dB = 20.0f * log10f(U0_vrms / Ui_vrms);
+            }
+            else
+            {
+                Au_dB = HMI_AU_MIN_DB; // 或者你的显示下限
+            }
+        }
+
+        /* 第⑤步：将 Au_dB 映射到 HMI 坐标（0~255）并发送波形点
+         * 当前映射范围：-80dB ~ +80dB → 0 ~ 255，可按实际量程调整 */
+        hmi_val = (uint8_t)((Au_dB - HMI_AU_MIN_DB) * 255.0f / (HMI_AU_MAX_DB - HMI_AU_MIN_DB));
+        HMI_Wave("s0.id", 0, hmi_val);
+    }
+
+    /* 扫频结束后恢复 AD9833 到初始测量频率 */
+    ad9833_set_freq_ch(1000, ad9833_Sine, ad9833_CH0);
+}
+
+
+
+

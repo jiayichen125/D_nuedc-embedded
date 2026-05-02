@@ -159,3 +159,7 @@ void ad9833_sweep_stop(ad9833_sweep_t *sweep)
         sweep->enable = 0U;
     }
 }
+
+void ad9833_set_amplitude(uint8_t amp){
+    
+}

@@ -64,5 +64,6 @@ void ad9833_sweep_start(ad9833_sweep_t *sweep, uint32_t start_hz, uint32_t stop_
 void ad9833_sweep_start_ch(ad9833_sweep_t *sweep, uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz, uint32_t dwell_ms, uint16_t type, uint8_t ch);
 uint8_t ad9833_sweep_process(ad9833_sweep_t *sweep);
 void ad9833_sweep_stop(ad9833_sweep_t *sweep);
+void ad9833_set_amplitude(uint8_t amp);
 
 #endif // ad9833_H
