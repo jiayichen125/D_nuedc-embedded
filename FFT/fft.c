@@ -52,9 +52,9 @@ float FFT_Input[FFT_LEN * 2];
 float FFT_mag[FFT_LEN];
 float IFFT_Output[FFT_LEN];
 
-uint8_t EnableWindow = 1;                    // 1=使能 Hanning 窗，0=矩形窗
+uint8_t EnableWindow = 1;                    // 1=使能 Flat Top 窗，0=矩形窗
 float Window_OutputBuffer[ADC_LEN];          // 窗函数系数缓存
-static float window_power_correction = 1.0f; // 窗函数功率补偿系数（Hanning=1.5）
+static float window_power_correction = 1.0f; // 窗函数幅值补偿系数（Flat Top≈4.63867）
 
 /* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
 void showdata(float *buffer, uint16_t n)
@@ -66,11 +66,11 @@ void showdata(float *buffer, uint16_t n)
 }
 
 /**
- * @brief 计算 Hanning 窗系数并写入 Window_OutputBuffer[]
+ * @brief 计算 Flat Top 窗系数并写入 Window_OutputBuffer[]
  *
  * 为何需要加窗：ADC 采样的有限长度序列相当于乘以矩形窗，
  * 会在 FFT 结果中产生频谱泄漏（旁瓣），导致相邻频率干扰。
- * Hanning 窗能将旁瓣衰减约 31dB，适合单音正弦波的幅值测量。
+ * Flat Top 窗适合单音正弦波的幅值测量，可减小频率未落在 FFT bin 中心时的幅值误差。
  *
  * 若目标优先是“幅值精度”而不是“频率分辨率”，可考虑改为 Flat Top 窗：
  *   w[i] = a0
@@ -102,21 +102,23 @@ void window(void)
 {
     if (EnableWindow)
     {
-        float a0 = 0.21557895 ;
-        float a1 = 0.41663158 ;
-        float a2 = 0.277263158 ;
-        float a3 = 0.083578947 ;
-        float a4 = 0.006947368 ;
+        float a0 = 0.21557895f;
+        float a1 = 0.41663158f;
+        float a2 = 0.277263158f;
+        float a3 = 0.083578947f;
+        float a4 = 0.006947368f;
 
-            for (int i = 0; i < ADC_LEN; i++)
+        for (int i = 0; i < ADC_LEN; i++)
         {
-            float tempCos = cosf(2.0f * PI * i / (ADC_LEN - 1));
-            // Window_OutputBuffer[i] = 0.5f * (1.0f - tempCos);
-            Window_OutputBuffer[i] = a0 - a1 * cos(2 * PI * i / (FFT_LEN - 1)) + a2 * cos(4 * PI * i / (FFT_LEN - 1)) - a3 * cos(6 * PI * i / (FFT_LEN - 1)) + a4 * cos(8 * PI * i / (FFT_LEN - 1));
+            float x = 2.0f * PI * i / (ADC_LEN - 1);
+            Window_OutputBuffer[i] = a0
+                                   - a1 * cosf(x)
+                                   + a2 * cosf(2.0f * x)
+                                   - a3 * cosf(3.0f * x)
+                                   + a4 * cosf(4.0f * x);
         }
         /* 窗函数增益系数*/
-        // window_power_correction = 1.5f;
-        window_power_correction = 4.64f; // Flat Top 窗的幅值补偿因子（相干增益的倒数）
+        window_power_correction = 4.63867f; // Flat Top 窗的幅值补偿因子（相干增益的倒数）
     }
     else
     {
@@ -136,12 +138,12 @@ void window(void)
  *
  * 处理流程：
  *   1. 求均值 DC，作为直流偏置去除
- *   2. 加 Hanning 窗（减少频谱泄漏）
+ *   2. 加 Flat Top 窗（提高单频幅值测量精度）
  *   3. 填充复数输入缓冲（虚部为0）
  *   4. CMSIS arm_cfft_f32 执行 FFT
  *   5. arm_cmplx_mag_f32 计算各 bin 幅度
  *   6. 归一化：直流 bin /N, 其余 bin *2/N（对应单边谱峰值）
- *   7. 乘以窗函数功率补偿系数（Hanning=1.5）
+ *   7. 乘以窗函数幅值补偿系数（Flat Top≈4.63867）
  *   8. 找最大 bin → 重心插值精化频率和幅值 → 写入 *FFT_Ampl
  *
  * 注意：FFT_Ampl1/FFT_Ampl2 是全局暂存，连续调用时第一次结果
