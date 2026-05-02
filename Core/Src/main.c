@@ -54,14 +54,16 @@
 #define ADC_SIZE 1024
 #define rank 2
 
-/* ADC1: rank1=Us, rank2=Ui
-   ADC2: rank1=U0, rank2=AD8703 detector output */
+/* 通道配置：ADC_Us=IN16, ADC_Ui=IN17, ADC_U0=IN5, ADC_8307=IN14
+   rank1是buffer的奇数项，rank2是偶数项
+   ADC1: rank1=Us, rank2=Ui
+   ADC2: rank1=U0, rank2=AD8307 detector output */
 uint16_t ADC_Buffer1[ADC_SIZE * rank] = {0};
 uint16_t ADC_Buffer2[ADC_SIZE * rank] = {0};
 uint16_t ADC_Us[ADC_SIZE] = {0};
 uint16_t ADC_U0[ADC_SIZE] = {0};
 uint16_t ADC_Ui[ADC_SIZE] = {0};
-uint16_t ADC_8703[ADC_SIZE] = {0};
+uint16_t ADC_8307[ADC_SIZE] = {0};
 
 /* Set only after both ADC1 and ADC2 finish one complete DMA frame. */
 volatile uint8_t ADC_Flag = 0;
@@ -92,7 +94,7 @@ static void Split_ADC_Buffers(void)
         ADC_Us[i] = ADC_Buffer1[2U * i];
         ADC_Ui[i] = ADC_Buffer1[2U * i + 1U];
         ADC_U0[i] = ADC_Buffer2[2U * i];
-        ADC_8703[i] = ADC_Buffer2[2U * i + 1U];
+        ADC_8307[i] = ADC_Buffer2[2U * i + 1U];
     }
 }
 
