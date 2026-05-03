@@ -69,10 +69,16 @@ uint16_t ADC_8307[ADC_SIZE] = {0};
 volatile uint8_t ADC_Flag = 0;
 static volatile uint8_t adc1_done = 0;
 static volatile uint8_t adc2_done = 0;
+volatile uint8_t task_none = 0;
 
 /* Input/output resistance values used by the basic measurement functions. */
 int RL = 2000;
 int Rs = 10000;
+
+volatile uint8_t task_measure = 0;
+volatile uint8_t task_sweep = 0;
+volatile uint8_t task_fault = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -178,13 +184,44 @@ int main(void)
     System_Init();
   /* USER CODE END 2 */
 
-  /* Infinite loop */
-  /* USER CODE BEGIN WHILE */
-  while (1)
-  {
-    /* USER CODE END WHILE */
+    /* Infinite loop */
+    /* USER CODE BEGIN WHILE */
+    while (1)
+    {
+        Usart_Rx_Proc();
+        if (task_measure == 1)
+        {
 
-    /* USER CODE BEGIN 3 */
+            if (ADC_Flag == 1)
+            {
+                ADC_Flag = 0U;
+                Split_ADC_Buffers();
+
+                Calculate_Input_Impedance(Rs);
+                Calculate_Output_Impedance(RL);
+                Calculate_Gain();
+
+                Start_ADC_Capture();
+            }
+        }
+        else if (task_sweep == 1)
+        {
+            task_sweep = 0;
+            Sweep_Gain(1000, 300000, 1000); 
+        }
+        else if (task_fault == 1)
+        {
+            task_fault = 0;
+            
+        }
+        else if (task_none == 1)
+        {
+            task_none = 0;
+        }
+
+        /* USER CODE END WHILE */
+
+        /* USER CODE BEGIN 3 */
     }
   /* USER CODE END 3 */
 }

@@ -13,5 +13,7 @@
 //APL
 #include "dds_apl.h"
 
+#include "usart_deal.h"
+
 void System_Init(void);
 #endif // system_H
