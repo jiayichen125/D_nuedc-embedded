@@ -187,14 +187,12 @@ int main(void)
             ADC_Flag = 0U;
             Split_ADC_Buffers();
 
-            /* 输入电阻 输出电阻增益计算 */
             Calculate_Input_Impedance(Rs);
             Calculate_Output_Impedance(RL);
             Calculate_Gain();
-            Sweep_Gain(100, 3000000, 1000);
+            Sweep_Gain(100, 3000000, 100);
             Start_ADC_Capture();
         }
-        /* USER CODE END WHILE */
 
         /* USER CODE BEGIN 3 */
     }

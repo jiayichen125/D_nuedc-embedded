@@ -4,6 +4,7 @@
 #include "system.h"
 
 // AD9833 registers
+
 #define ad9833_Reg_control (0<<14)
 #define ad9833_Reg_freq0 (1<<14)
 #define ad9833_Reg_freq1 (2<<14)
@@ -32,7 +33,7 @@
 #define AD9833_FREQ_WORD_SCALE (1ULL << AD9833_FREQ_BITS)
 #define AD9833_FREQ_WORD_MAX ((1UL << AD9833_FREQ_BITS) - 1UL)
 #define AD9833_FREQ_DATA_MASK ((1U << AD9833_FREQ_DATA_BITS) - 1U)
-#define ad9833_Freq 1000
+#define ad9833_Freq 10000
 
 // Waveform control words
 #define ad9833_Sine ((0<<5)|(0<<1)|(0<<3))

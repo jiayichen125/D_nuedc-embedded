@@ -1,5 +1,7 @@
 #include "ad9833.h"
 
+#define MCP41010_WRITE_POT0 0x1100U
+
 static uint16_t ad9833_control_word = (ad9833_Reg_control_B28 | ad9833_Sine);
 
 static uint16_t ad9833_freq_reg(uint8_t ch)
@@ -12,8 +14,47 @@ static uint16_t ad9833_fselect_bit(uint8_t ch)
     return (ch == ad9833_CH1) ? ad9833_Reg_control_FSELECT : 0;
 }
 
+
+
+static void MCP41010_Write(uint8_t amp)
+{
+    uint8_t i;
+    uint16_t temp = MCP41010_WRITE_POT0 | amp;
+
+    AD9833_SPI_CS_H;   // 不选中 AD9833
+    MCP41010_CS_L;     // 选中 MCP41010
+
+    for (i = 0; i < 16; i++)
+    {
+        AD9833_SPI_SCK_L;
+
+        if (temp & 0x8000U)
+            AD9833_SPI_SDA_H;
+        else
+            AD9833_SPI_SDA_L;
+
+        temp <<= 1;
+
+        AD9833_SPI_SCK_H;
+
+        for (volatile uint16_t d = 0; d < 100; d++)
+        {
+            __NOP();
+        }
+    }
+
+    MCP41010_CS_H;     // 锁存数据
+}
+
+void ad9833_set_amplitude(uint8_t amp)
+{
+    MCP41010_Write(amp);
+}
+
+
 void ad9833_init(void)
 {
+    MCP41010_CS_H;
     AD9833_SPI_CS_H;
     AD9833_SPI_SCK_H;
     
@@ -22,10 +63,12 @@ void ad9833_init(void)
     ad9833_control_word = ad9833_Reg_control_B28 | ad9833_Sine;
     ad9833_write_reg(ad9833_control_word | ad9833_Reg_control_Reset);
     ad9833_set_freq_ch(ad9833_Freq, ad9833_Sine, ad9833_CH0);
+    //ad9833_set_amplitude(0x80);
 }
 
 void ad9833_write_reg(uint16_t value)
 {
+    MCP41010_CS_H;
     AD9833_SPI_CS_L;
     AD9833_SPI_16bits_Write(value);
     AD9833_SPI_CS_H;
@@ -160,6 +203,3 @@ void ad9833_sweep_stop(ad9833_sweep_t *sweep)
     }
 }
 
-void ad9833_set_amplitude(uint8_t amp){
-    
-}
