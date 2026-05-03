@@ -2,7 +2,9 @@
 #define SWITCH_H
 
 #include "gpio.h"
-void Relay_On(void);
-void Relay_Off(void);
+void Relay1_On(void);
+void Relay1_Off(void);
+void Relay2_On(void);
+void Relay2_Off(void);
 
 #endif /* SWITCH_H */

@@ -25,8 +25,8 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #define HMI_AU_MIN_DB (-80.0f) // hmi映射范围
 #define HMI_AU_MAX_DB (80.0f)
 
-#define AD8307_SLOPE_V_PER_DB (0.025f) // 25 mV/dB，后续实测标定
-#define AD8307_INTERCEPT_DBM (-84.0f)  // 典型截距，后续实测标定
+#define AD8307_SLOPE_V_PER_DB (0.02575f) // 25 mV/dB，后续实测标定
+#define AD8307_INTERCEPT_DBM (-84.27f)  // 典型截距，后续实测标定
 #define AD8307_LOAD_OHM (50.0f)        // AD8307 输入等效负载/系统阻抗
 #define AD8307_NOISE_FLOOR_VRMS (0.0f)
 
@@ -212,6 +212,7 @@ void Calculate_Input_Impedance(int Rs)
     HMI_send_float("x0", Ri);
 }
 
+
 /**
  * @brief 计算被测放大器输出阻抗 Zo
  *
@@ -236,7 +237,7 @@ void Calculate_Output_Impedance(int RL)
     FFT_Process(ADC_U0, &FFT_Ampl1); // FFT_Ampl1 = U0 (带载)
 
     /* 步骤2: 断开负载，等待信号稳定 */
-    Relay_Off();
+    Relay1_Off();
     HAL_Delay(10);
 
     /* 步骤3~4: 重采样，获取空载电压 */
@@ -248,7 +249,7 @@ void Calculate_Output_Impedance(int RL)
     }
 
     /* 步骤5: 恢复负载接通，保证后续测量环境一致 */
-    Relay_On();
+    Relay1_On();
 }
 
 /**
@@ -290,6 +291,7 @@ void Process_FFT_mag(float *FFT_mag, float *FFT_mag_max, uint32_t *FFT_mag_max_i
     *FFT_Ampl = *FFT_mag_max;
 }
 
+
 /**
  * @brief 手动搜索基波 bin（跳过 DC 附近的 bin 0、1）
  *
@@ -311,6 +313,7 @@ void Find_BaseIndex(void)
         }
     }
 }
+
 
 /**
  * @brief 重心插值法精化 FFT 频率和幅值
@@ -477,12 +480,13 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
          * 正向情况：amp_code 越大，输出越大
          * 反向情况：amp_code 越大，输出越小
          先自己測量在ad9833_set_amplitude(128/64)的情況下，Ui_Ampl的值，然後調整AD9833_AMP_REVERSE的值
+				实测是amp_code越大输出越大,AD9833_AMP_REVERSE为0
          */
-#if AD9833_AMP_REVERSE
-        float next_code = (float)ad9833_amp_code / ratio;
-#else
+//#if AD9833_AMP_REVERSE
+//        float next_code = (float)ad9833_amp_code / ratio;
+//#else
         float next_code = (float)ad9833_amp_code * ratio;
-#endif
+//#endif
 
         /* 限制幅值码范围，避免超过 0~255。 */
         if (next_code < (float)AD9833_AMP_CODE_MIN)
@@ -507,8 +511,9 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
 }
 
 
+
 /* -----------------------------------------------------------------------
- * 扫频幅频特性测量（待实现）
+ * 扫频幅频特性测量
  *
  * 目标：在 start_hz ~ stop_hz 范围内步进扫频，逐点测量增益 Av(dB)，
  *       在 HMI 波形控件上绘制幅频特性曲线。
@@ -518,8 +523,8 @@ uint8_t AD9833_Lock_Ui_Amplitude(void)
  *   ② HAL_Delay(5) 等待 AD9833 输出稳定（约 1~2 个信号周期）
  *   ③ Acquire_All_ADC_Samples_Blocking(200) 重新采样一帧
  *   ④ 判断频率范围：
- *      f < 100000Hz → FFT 路径：FFT_Process(U0) / FFT_Process(Ui) → Av
- *      f >= 100000Hz → AD8307 路径：读 ADC_8307[] 均值 → 换算 Vrms → Av
+ *      f <8000Hz → FFT 路径：FFT_Process(U0) / FFT_Process(Ui) → Av
+ *      f >= 8000Hz → AD8307 路径：读 ADC_8307[] 均值 → 换算 Vrms → Av
  *   ⑤ 将 Av 映射到 HMI 波形控件坐标（0~255），调用 HMI_Wave()
  *   ⑥ f += step_hz，循环直到 f > stop_hz
  *
@@ -577,6 +582,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
 
         if (f < 8000U)
         {
+	
             /* 第④步（低频路径）：FFT 计算 U0 和 Ui 幅值，求增益 */
             float U0_Ampl, Ui_Ampl;
             FFT_Process(ADC_U0, &U0_Ampl);
@@ -585,6 +591,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
                 Au_dB = 20.0f * log10f(U0_Ampl / Ui_Ampl);
             else
                 Au_dB = 0.0f;
+
         }
         else
         {
@@ -625,7 +632,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
             }
             else
             {
-                Au_dB = HMI_AU_MIN_DB; // 或者你的显示下限
+                Au_dB = HMI_AU_MIN_DB; // hmi显示下限
             }
         }
 

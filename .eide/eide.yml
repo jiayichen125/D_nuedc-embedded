@@ -8,7 +8,6 @@ srcDirs:
   - My_SPI
   - My_APL
   - My_BLL
-  - My_HDL
   - My_FML
 virtualFolder:
   name: <virtual_root>
@@ -86,6 +85,8 @@ virtualFolder:
       files:
         - path: HMI/HMI.c
         - path: HMI/HMI.h
+        - path: HMI/usart_deal.c
+        - path: HMI/usart_deal.h
       folders: []
     - name: ::CMSIS
       files: []
