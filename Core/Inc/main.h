@@ -72,8 +72,6 @@ void Error_Handler(void);
 #define AD9833_Vcc_GPIO_Port GPIOA
 #define AD9833_Switch_Pin GPIO_PIN_4
 #define AD9833_Switch_GPIO_Port GPIOA
-#define RELAY_5_Pin GPIO_PIN_4
-#define RELAY_5_GPIO_Port GPIOC
 #define ADC_AD8307_Pin GPIO_PIN_1
 #define ADC_AD8307_GPIO_Port GPIOB
 #define AD9833_CS_Pin GPIO_PIN_11
@@ -82,8 +80,6 @@ void Error_Handler(void);
 #define AD9833_SDA_GPIO_Port GPIOH
 #define RELAY_3_Pin GPIO_PIN_6
 #define RELAY_3_GPIO_Port GPIOC
-#define RELAY_4_Pin GPIO_PIN_7
-#define RELAY_4_GPIO_Port GPIOC
 #define AD9833_SCK_Pin GPIO_PIN_14
 #define AD9833_SCK_GPIO_Port GPIOH
 /* USER CODE BEGIN Private defines */

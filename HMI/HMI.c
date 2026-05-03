@@ -32,24 +32,12 @@ void HMI_Wave(char* wf_name, int ch, int val)
 // 快速波形显示（连续数据）
 void HMI_Wave_Fast(char* wf_name, int ch, int count, uint8_t* show_data)
 {
-    int i;
-    
-    // 第一步：发送命令头
     printf("addt %s,%d,%d\xff\xff\xff", wf_name, ch, count);
-    
-    // 第二步：延迟等待屏幕准备
-    HAL_Delay(10);
-    
-    // 第三步：发送波形数据（字节流）
-    for (i = 0; i < count; i++) {
-        // 直接发送字节，不需要转换
-        printf("%c", show_data[i]);
-    }
-    
-    // 第四步：发送结束符
-    printf("\xff\xff\xff");
-    
-    HAL_Delay(10);  // 等待屏幕处理
+    HAL_Delay(20);
+
+    HAL_UART_Transmit(&huart1, show_data, count, 1000);
+
+    HAL_Delay(20);
 }
 
 // 清空波形
@@ -67,8 +55,8 @@ void HMI_set_property(char* obj_name, char* property, int value)
 }
 
 // 设置页面
-void HMI_Set_Page(int page_id)
+void HMI_Set_Page(char *page_id)
 {
     // 格式: page page_id + 0xFF 0xFF 0xFF
-    printf("page %d\xff\xff\xff", page_id);
+    printf("page %s\xff\xff\xff", page_id);
 }

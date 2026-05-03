@@ -11,5 +11,6 @@ void HMI_Wave(char* name, int ch, int val);
 void HMI_Wave_Fast(char* name, int ch, int count, uint8_t* show_data);  // 改为 uint8_t*
 void HMI_Wave_Clear(char* name, int ch);
 void HMI_set_property(char* obj_name, char* property, int value);  // 新增
- 
+void HMI_Set_Page(char *page_id);
+
 #endif
