@@ -33,7 +33,7 @@
 #define AD9833_FREQ_WORD_SCALE (1ULL << AD9833_FREQ_BITS)
 #define AD9833_FREQ_WORD_MAX ((1UL << AD9833_FREQ_BITS) - 1UL)
 #define AD9833_FREQ_DATA_MASK ((1U << AD9833_FREQ_DATA_BITS) - 1U)
-#define ad9833_Freq 10000
+#define ad9833_Freq 1000
 
 // Waveform control words
 #define ad9833_Sine ((0<<5)|(0<<1)|(0<<3))

@@ -188,36 +188,66 @@ int main(void)
     /* USER CODE BEGIN WHILE */
     while (1)
     {
-        Usart_Rx_Proc();
-        if (task_measure == 1)
-        {
+        //Usart_Rx_Proc();
+//        if (task_measure == 1)
+//        {
 
-            if (ADC_Flag == 1)
-            {
-                ADC_Flag = 0U;
-                Split_ADC_Buffers();
+//            if (ADC_Flag == 1)
+//            {
+//                ADC_Flag = 0U;
+//                Split_ADC_Buffers();
 
-                Calculate_Input_Impedance(Rs);
-                Calculate_Output_Impedance(RL);
-                Calculate_Gain();
+//                Calculate_Input_Impedance(Rs);
+//                Calculate_Output_Impedance(RL);
+//                Calculate_Gain();
 
-                Start_ADC_Capture();
-            }
-        }
-        else if (task_sweep == 1)
+//                Start_ADC_Capture();
+//            }
+//        }
+//        else if (task_sweep == 1)
+//        {
+//            task_sweep = 0;
+//            Sweep_Gain(1000, 300000, 1000); 
+//        }
+//        else if (task_fault == 1)
+//        {
+//            task_fault = 0;
+//            
+//        }
+//        else if (task_none == 1)
+//        {
+//            task_none = 0;
+//        }
+
+         if (task_measure == 1)
+         {
+              if (ADC_Flag == 1U){
+                 ADC_Flag = 0U;
+                 Split_ADC_Buffers();
+
+                 Calculate_Input_Impedance(Rs);
+                 Calculate_Output_Impedance(RL);
+                 Calculate_Gain();
+
+                 Start_ADC_Capture();
+                 }
+         }
+         else if (task_sweep == 1)
         {
-            task_sweep = 0;
-            Sweep_Gain(1000, 300000, 1000); 
+                 task_sweep = 0;
+                 Sweep_Gain(1000, 300000, 1000);
+                 Start_ADC_Capture();
         }
-        else if (task_fault == 1)
-        {
-            task_fault = 0;
-            
-        }
-        else if (task_none == 1)
-        {
-            task_none = 0;
-        }
+         else if (task_fault == 1)
+         {
+                 task_fault = 0;
+                 // Fault_Detect();
+                 Start_ADC_Capture();
+         }
+         else
+         {
+        // page0 主页面空闲态
+          }
 
         /* USER CODE END WHILE */
 

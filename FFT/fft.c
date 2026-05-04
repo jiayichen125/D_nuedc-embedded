@@ -93,6 +93,8 @@ uint8_t EnableWindow = 1;                    // 1=使能 Flat Top 窗，0=矩形
 float Window_OutputBuffer[ADC_LEN];          // 窗函数系数缓存
 static float window_power_correction = 1.0f; // 窗函数幅值补偿系数（Flat Top≈4.63867）
 
+unsigned char  buf[64];
+
 /* 调试用：通过 printf/串口打印浮点数组，用于 PC 端验证 FFT 结果 */
 void showdata(float *buffer, uint16_t n)
 {
@@ -209,7 +211,8 @@ void Calculate_Input_Impedance(int Rs)
     FFT_Process(ADC_Ui, &FFT_Ampl1); // 先算 Ui，结果存 FFT_Ampl1
     FFT_Process(ADC_Us, &FFT_Ampl2); // 再算 Us，结果存 FFT_Ampl2
     Ri = (float)Rs * FFT_Ampl1 / (FFT_Ampl2 - FFT_Ampl1);
-    HMI_send_float("x0", Ri);
+    sprintf((char*)buf, "%.1f", Ri);
+	  HMI_send_string("t0",(char *)buf);
 }
 
 /**
@@ -244,7 +247,8 @@ void Calculate_Output_Impedance(int RL)
     {
         FFT_Process(ADC_U0, &FFT_Ampl2); // FFT_Ampl2 = U∞ (空载)
         R0 = (float)RL * (FFT_Ampl2 - FFT_Ampl1) / FFT_Ampl1;
-        HMI_send_float("x1", R0);
+        sprintf((char*)buf, "%.1f", R0);
+	      HMI_send_string("t1",(char *)buf);
     }
 
     /* 步骤5: 恢复负载接通，保证后续测量环境一致 */
@@ -273,7 +277,8 @@ void Calculate_Gain(void)
     else
         Au = 0.0f;
 
-    HMI_send_float("x2", Au);
+    sprintf((char*)buf, "%.1f", Au);
+	  HMI_send_string("t2",(char *)buf);
 }
 
 /**

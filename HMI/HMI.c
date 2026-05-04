@@ -60,3 +60,6 @@ void HMI_Set_Page(char *page_id)
     // 格式: page page_id + 0xFF 0xFF 0xFF
     printf("page %s\xff\xff\xff", page_id);
 }
+
+
+
