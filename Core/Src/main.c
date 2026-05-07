@@ -69,15 +69,18 @@ uint16_t ADC_8307[ADC_SIZE] = {0};
 volatile uint8_t ADC_Flag = 0;
 static volatile uint8_t adc1_done = 0;
 static volatile uint8_t adc2_done = 0;
+
+/* Bug#3修复：记录ADC采集是否正在进行，供task_measure重测使用 */
+static volatile uint8_t adc_capture_running = 0;
 volatile uint8_t task_none = 0;
 
 /* Input/output resistance values used by the basic measurement functions. */
 int RL = 2000;
 int Rs = 10000;
 
-volatile uint8_t task_measure = 0;
-volatile uint8_t task_sweep = 0;
-volatile uint8_t task_fault = 0;
+volatile uint8_t task_measure = 0; //Start real-time measurement of input/output impedance and gain.
+volatile uint8_t task_sweep = 0;//Start measuring gain frequency response and plotting
+volatile uint8_t task_fault = 0;//Start fault diagnosis
 
 /* USER CODE END PV */
 
@@ -113,6 +116,7 @@ static void Start_ADC_Capture(void)
     adc1_done = 0;
     adc2_done = 0;
     ADC_Flag = 0;
+    adc_capture_running = 1;
 
     HAL_ADC_Start_DMA(&hadc1, (uint32_t *)ADC_Buffer1, ADC_SIZE * rank);
     HAL_ADC_Start_DMA(&hadc2, (uint32_t *)ADC_Buffer2, ADC_SIZE * rank);
@@ -184,14 +188,13 @@ int main(void)
     System_Init();
   /* USER CODE END 2 */
 
-    /* Infinite loop */
-    /* USER CODE BEGIN WHILE */
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
     while (1)
     {
         Usart_Rx_Proc();
         if (task_measure == 1)
         {
-
             if (ADC_Flag == 1)
             {
                 ADC_Flag = 0U;
@@ -201,6 +204,12 @@ int main(void)
                 Calculate_Output_Impedance(RL);
                 Calculate_Gain();
 
+                Start_ADC_Capture();
+            }
+            else if (adc_capture_running == 0U)
+            {
+                /* Bug#3修复：从其他状态切换回task_measure时ADC已停止，
+                 * ADC_Flag不会再被DMA中断置位，需在此处重新启动采集 */
                 Start_ADC_Capture();
             }
         }
@@ -219,9 +228,9 @@ int main(void)
             task_none = 0;
         }
 
-        /* USER CODE END WHILE */
+    /* USER CODE END WHILE */
 
-        /* USER CODE BEGIN 3 */
+    /* USER CODE BEGIN 3 */
     }
   /* USER CODE END 3 */
 }
@@ -327,6 +336,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 
     if (adc1_done == 1U && adc2_done == 1U)
     {
+        adc_capture_running = 0;
         ADC_Flag = 1U;
     }
 }

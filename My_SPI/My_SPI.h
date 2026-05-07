@@ -1,7 +1,7 @@
 #ifndef MY_SPI_H
 #define MY_SPI_H
 
-#include "system.h"
+#include "main.h"
 
 #define AD9833_SPI_SCK_H HAL_GPIO_WritePin(GPIOH, GPIO_PIN_14, GPIO_PIN_SET)
 #define AD9833_SPI_SCK_L HAL_GPIO_WritePin(GPIOH, GPIO_PIN_14, GPIO_PIN_RESET)
