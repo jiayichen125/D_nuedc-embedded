@@ -5,10 +5,8 @@ deviceName: null
 packDir: .pack/Keil/STM32H7xx_DFP.2.7.0
 srcDirs:
   - Switch
-  - My_SPI
   - My_APL
-  - My_BLL
-  - My_FML
+  - ad9833
 virtualFolder:
   name: <virtual_root>
   files: []
@@ -113,10 +111,7 @@ targets:
         - FFT
         - HMI
         - My_APL
-        - My_BLL
-        - My_HDl
-        - My_FML
-        - My_SPI
+        - ad9833
         - Switch
         - .cmsis/include
         - MDK-ARM/RTE/_D_AD9833_AD8703
