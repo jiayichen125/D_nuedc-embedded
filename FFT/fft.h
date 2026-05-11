@@ -25,5 +25,6 @@ void Calculate_Output_Impedance(int RL);
 void Calculate_Gain(void);
 void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz);
 float ad8307_noiseclean(uint8_t update_noise);
+void Adjust_Sampling_Rate(uint32_t freq);
 
 #endif

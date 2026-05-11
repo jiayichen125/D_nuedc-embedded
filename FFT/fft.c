@@ -15,6 +15,9 @@ extern uint16_t ADC_8307[1024]; // IN14: AD8307 对数检波器直流输出 (高
  * 返回 1=成功, 0=超时 */
 extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 
+/* TIM3 句柄，用于动态修改 ARR 切换采样率 */
+extern TIM_HandleTypeDef htim3;
+
 /* -----------------------------------------------------------------------
  * 宏定义
  * ----------------------------------------------------------------------- */
@@ -29,6 +32,8 @@ extern uint8_t Acquire_All_ADC_Samples_Blocking(uint32_t timeout_ms);
 #define AD8307_INTERCEPT_DBM (-84.27f)  // 典型截距，后续实测标定
 #define AD8307_LOAD_OHM (50.0f)        // AD8307 输入等效负载/系统阻抗
 #define AD8307_NOISE_FLOOR_VRMS (0.0f)
+
+
 
 /* 目标 Ui 幅值。
  * 注意：这里的单位不是伏特，而是 FFT_Process() 输出的 ADC LSB 幅值。
@@ -567,6 +572,7 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
     {
         /* 第②步：设置 AD9833 频率，等待输出稳定 */
         ad9833_set_freq_ch(f, ad9833_Sine, ad9833_CH0);
+        Adjust_Sampling_Rate(f);
         HAL_Delay(5);
 
         /* 闭环调 AD9833/PGA 幅值 */
@@ -645,4 +651,44 @@ void Sweep_Gain(uint32_t start_hz, uint32_t stop_hz, uint32_t step_hz)
     /* 扫频结束后恢复 AD9833 到初始测量频率 */
     ad9833_set_freq_ch(1000, ad9833_Sine, ad9833_CH0);
 }
+//动态采样率调整函数（根据频率自动调整 fs）
+void Adjust_Sampling_Rate(uint32_t freq)
+{
+    /* TIM3 计数时钟 = 240MHz / (PSC+1) = 240MHz / 12 = 20MHz
+     * ARR = 20,000,000 / fs - 1
+     * 分档策略：每档确保峰值 bin 落在 N/16 ~ N/4 之间，兼顾分辨率与奈奎斯特余量
+     */
+    #define TIM3_CNT_CLK_HZ 20000000UL
 
+    float new_fs;
+
+    if (freq < 500U)
+    {
+        new_fs = 5000.0f;      /* bin分辨率 ~4.9 Hz */
+    }
+    else if (freq < 2000U)
+    {
+        new_fs = 10000.0f;     /* bin分辨率 ~9.8 Hz */
+    }
+    else if (freq < 8000U)
+    {
+        new_fs = 20000.0f;     /* bin分辨率 ~19.5 Hz，默认档 */
+    }
+    else if (freq < 40000U)
+    {
+        new_fs = 100000.0f;    /* bin分辨率 ~97.7 Hz */
+    }
+    else
+    {
+        new_fs = 200000.0f;    /* bin分辨率 ~195 Hz */
+    }
+
+    if (new_fs == fs)
+    {
+        return;  /* 档位未变，无需重配 */
+    }
+
+    uint32_t arr = TIM3_CNT_CLK_HZ / (uint32_t)new_fs - 1U;
+    __HAL_TIM_SET_AUTORELOAD(&htim3, arr);
+    fs = new_fs;
+}
